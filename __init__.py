@@ -26,13 +26,36 @@
 #   - Migrated OCC bindings from pythonocc-core to OCP (cadquery-ocp-novtk
 #     7.9.3.1.1, pybind11); native module reworked to a BinTools serialize
 #     handoff, decoupling it from the Python bindings' ABI (v2.3.0)
+#   - Modern import dialog with quality presets and unit-aware deflection
+#     (physical mm regardless of file units), collection-instances hierarchy
+#     mode, construction-geometry filters, per-instance color overrides,
+#     import-dialog defaults in preferences (v2.4.0)
+#   - SurfaceUV/BoxUV layers, viewport drag & drop, folder batch import,
+#     state-preserving Regenerate, Prune/Restore hierarchy, mesh cleanup
+#     (v2.4.1)
+#   - IGES and BREP import, free-edge curves import, relative (adaptive)
+#     tessellation with parallel meshing, pre-import file analyzer with
+#     per-machine time estimates (v2.4.2)
+#   - Non-blocking background import via a headless-Blender worker process:
+#     UI stays responsive, live progress in the status bar, Esc cancels;
+#     identical results to the synchronous path (v2.4.3)
+#   - Code-review hardening pass (v2.4.4): fixed multi-level Prune/Restore
+#     rebuilding inverted; artist-friendly detail slider being silently
+#     overridden by the seeded quality preset; batch import ignoring the
+#     preference defaults; Regenerate/Reload using the STEP reader for
+#     IGES/BREP files; background worker now inherits the user's addon
+#     preferences, kills itself if the parent Blender dies, and can no
+#     longer hang on a silent worker exit; long CAD material names no
+#     longer abort the import; per-label surface color no longer overridden
+#     by curve color; edit-mode guards on all mesh tools; cursor-percentage
+#     and tooltip/layout polish throughout; CI fail-fast hardening
 
 bl_info = {
     "name": "STEPper NEXT",
     "author": "ambi, Peak-Design",
     "description": "STEP OpenCASCADE import",
     "blender": (5, 1, 0),
-    "version": (2, 3, 0),
+    "version": (2, 4, 4),
     "location": "3D View > Tools panel > STEPper NEXT",
     "category": "Import",
 }

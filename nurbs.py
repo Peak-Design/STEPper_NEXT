@@ -1,5 +1,9 @@
 import numpy as np
-from mathutils import Vector
+
+try:
+    from mathutils import Vector
+except ModuleNotFoundError:
+    Vector = None  # only needed inside Blender; importer runs without it
 
 
 class NurbsPoint:

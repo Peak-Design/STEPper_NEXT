@@ -25,6 +25,8 @@
 /* OpenCascade headers */
 #include <BRep_Tool.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <IMeshTools_Parameters.hxx>
+#include <Precision.hxx>
 #include <BinTools.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Standard_Failure.hxx>
@@ -140,8 +142,10 @@ static PyObject* py_mesh_and_extract(PyObject* /*self*/, PyObject* args)
     Py_ssize_t data_len = 0;
     double lin_def = 0.8;
     double ang_def = 0.5;
+    int relative = 0;
 
-    if (!PyArg_ParseTuple(args, "y#dd", &data, &data_len, &lin_def, &ang_def))
+    if (!PyArg_ParseTuple(args, "y#dd|p", &data, &data_len, &lin_def, &ang_def,
+                          &relative))
         return NULL;
 
     /* Deserialize, mesh and extract without holding the GIL — this is the
@@ -164,8 +168,13 @@ static PyObject* py_mesh_and_extract(PyObject* /*self*/, PyObject* args)
             /* Safety net: mesh faces that still lack triangulation.  Faces
              * already meshed at compatible deflection are skipped by OCCT,
              * so this is a no-op for the normal pre-tessellated handoff. */
-            BRepMesh_IncrementalMesh mesher(shape, lin_def, Standard_False,
-                                            ang_def, Standard_False);
+            IMeshTools_Parameters mp;
+            mp.Deflection = lin_def;
+            mp.Angle = ang_def;
+            mp.Relative = relative ? Standard_True : Standard_False;
+            mp.InParallel = relative ? Standard_True : Standard_False;
+            mp.MinSize = Precision::Confusion();
+            BRepMesh_IncrementalMesh mesher(shape, mp);
 
             for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
                 const TopoDS_Face& face = TopoDS::Face(ex.Current());
@@ -322,5 +331,9 @@ static struct PyModuleDef module_def = {
 PyMODINIT_FUNC PyInit_stepper_native(void)
 {
     import_array();  /* Initialize numpy C-API */
-    return PyModule_Create(&module_def);
+    PyObject* m = PyModule_Create(&module_def);
+    if (m != NULL) {
+        PyModule_AddIntConstant(m, "ABI_VERSION", 2);
+    }
+    return m;
 }

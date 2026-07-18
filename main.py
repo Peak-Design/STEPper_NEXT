@@ -36,6 +36,16 @@ from mathutils import Matrix, Vector  # type: ignore
 
 from .trimesh import TriMesh
 from .importer import NativeMeshData
+from . import import_ui
+from . import uv as uv_mod
+from . import tools as tools_mod
+from . import curves as curves_mod
+from . import analyzer as analyzer_mod
+from . import background as background_mod
+from .formats import classes as formats_classes
+
+# Active UV options for the current import (set by load_step)
+_uv_options = {"surface": True, "box": False, "box_scale": 1.0}
 
 # LRU file cache with max entry limit
 MAX_FILE_CACHE = 10
@@ -67,6 +77,31 @@ def _cache_get(filepath):
         global_file_cache.move_to_end(filepath)
         return global_file_cache[filepath]
     return None
+
+
+def _record_parse_calibration(step_reader, seconds):
+    """Update the per-machine parse-speed estimate (entities/sec, EMA).
+
+    Used by the pre-import analyzer to predict import times.
+    """
+    try:
+        xr = getattr(step_reader, "_xcaf_reader", None)
+        if xr is None or seconds <= 0.05:
+            return
+        model = xr.ChangeReader().StepModel()
+        if model is None:
+            return
+        eps = model.NbEntities() / seconds
+        prefs = _get_addon_prefs()
+        try:
+            cal = json.loads(prefs.perf_calibration or "{}")
+        except Exception:
+            cal = {}
+        prev = cal.get("parse_eps")
+        cal["parse_eps"] = eps if prev is None else prev * 0.7 + eps * 0.3
+        prefs.perf_calibration = json.dumps(cal)
+    except Exception:
+        pass
 
 
 def scalemat(mat, sl):
@@ -134,18 +169,23 @@ def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names
             obj_mats[ob_mat.name] = obi
         mat_counter = 0
 
+    write_uvs = (_uv_options.get("surface", True)
+                 and uvs is not None and len(uvs) > 0)
     if len(colors) > 0:
         color_layer = bm.loops.layers.color.get(vcol_name)
         if color_layer is None:
             color_layer = bm.loops.layers.color.new(vcol_name)
-        # uv_layer = bm.loops.layers.uv.verify()
+        if write_uvs:
+            uv_layer = bm.loops.layers.uv.get("SurfaceUV")
+            if uv_layer is None:
+                uv_layer = bm.loops.layers.uv.new("SurfaceUV")
         i = 0
         for face in bm.faces:
             mat_col = (0.5, 0.5, 0.5)
             mat_col_name = None
             for loop in face.loops:
-                # TODO: good, proper aspect ratio UV
-                # loop[uv_layer].uv = uvs[i]
+                if write_uvs:
+                    loop[uv_layer].uv = uvs[i]
                 if colors[i][0] >= 0.0:
                     loop[color_layer] = (*colors[i], 1.0)
                     mat_col = colors[i]
@@ -161,6 +201,11 @@ def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names
                     # Quantize color to merge near-identical materials
                     mat_col = _quantize_color(mat_col)
                     mat_col_name = "STEP_" + "".join("{0:0{1}x}".format(int(mat_col[i] * 255), 2) for i in range(3))
+
+                # add_material truncates to 60 chars — truncate here too or
+                # the bpy.data.materials lookups below KeyError on long
+                # CAD material names
+                mat_col_name = mat_col_name[:60]
 
                 # If material doesn't exist, create it
                 if mat_col_name not in bpy.data.materials:
@@ -206,6 +251,13 @@ def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names
     if len(norms) > 0:
         objdata.normals_split_custom_set(np.array(norms))
 
+    if _uv_options.get("box", False):
+        # Same file-unit correction as _apply_uv_layers: verts are still in
+        # file units here (scale is baked later)
+        unit_scale = _uv_options.get("unit_scale", 1.0) or 1.0
+        uv_mod.add_box_uv(
+            objdata, scale=_uv_options.get("box_scale", 1.0) / unit_scale)
+
     if prev_mode != "OBJECT":
         bpy.ops.object.mode_set(mode=prev_mode)
 
@@ -247,6 +299,7 @@ def choose_hierarchy_types(htypes):
     hierarchy_flat = False
     hierarchy_tree = False
     hierarchy_empties = False
+    hierarchy_instances = False
 
     if htypes == "FLAT_AND_TREE":
         hierarchy_flat = True
@@ -257,10 +310,12 @@ def choose_hierarchy_types(htypes):
         hierarchy_flat = True
     elif htypes == "EMPTIES":
         hierarchy_empties = True
+    elif htypes == "COLLECTION_INSTANCES":
+        hierarchy_instances = True
     else:
         assert False, "Invalid input parameter"
 
-    return hierarchy_flat, hierarchy_tree, hierarchy_empties
+    return hierarchy_flat, hierarchy_tree, hierarchy_empties, hierarchy_instances
 
 
 def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True):
@@ -319,13 +374,23 @@ def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True)
                 continue
             mesh = obj.data
             if mesh not in processed_meshes:
-                vert_count = len(mesh.vertices)
-                if vert_count > 0:
-                    verts = np.empty(vert_count * 3, dtype=np.float32)
-                    mesh.vertices.foreach_get('co', verts)
-                    verts *= scale
-                    mesh.vertices.foreach_set('co', verts)
-                    mesh.update()
+                if obj.type == "CURVE":
+                    for spline in mesh.splines:
+                        n_pts = len(spline.points)
+                        if n_pts > 0:
+                            co = np.empty(n_pts * 4, dtype=np.float32)
+                            spline.points.foreach_get('co', co)
+                            co = co.reshape(-1, 4)
+                            co[:, :3] *= scale
+                            spline.points.foreach_set('co', co.ravel())
+                elif hasattr(mesh, "vertices"):
+                    vert_count = len(mesh.vertices)
+                    if vert_count > 0:
+                        verts = np.empty(vert_count * 3, dtype=np.float32)
+                        mesh.vertices.foreach_get('co', verts)
+                        verts *= scale
+                        mesh.vertices.foreach_set('co', verts)
+                        mesh.update()
                 processed_meshes.add(mesh)
 
         for obj in chosen_objects:
@@ -365,7 +430,8 @@ def _print_phase2_times():
     print(f"  {'TOTAL':20s}: {total:7.2f}s")
 
 
-def precompute_mesh_data(step_reader, shp, lind, angd, hacks, part_name=""):
+def precompute_mesh_data(step_reader, shp, lind, angd, hacks, part_name="",
+                         fallback_color=None, relative=False):
     """Compute mesh + loop data from OCC shape.
 
     Returns (mesh, colors, mat_names, norms, uvs).
@@ -375,7 +441,9 @@ def precompute_mesh_data(step_reader, shp, lind, angd, hacks, part_name=""):
         t0 = time.time()
 
     mesh = step_reader.build_trimesh(shp, lin_def=lind, ang_def=angd, hacks=hacks,
-                                     part_name=part_name)
+                                     part_name=part_name,
+                                     fallback_color=fallback_color,
+                                     relative=relative)
 
     if _debug_timing:
         t1 = time.time()
@@ -394,7 +462,7 @@ def precompute_mesh_data(step_reader, shp, lind, angd, hacks, part_name=""):
         colors = mesh.get_loop_colors()
         mat_names = mesh.get_loop_mat_names()
         norms = mesh.get_loop_norms()
-        uvs = None  # not used currently
+        uvs = mesh.get_loop_uvs()
         if _debug_timing: t6 = time.time()
     else:
         # Python fallback: TriMesh path
@@ -424,14 +492,26 @@ def apply_mesh_to_blender(obj, mesh, colors, mat_names, norms, uvs,
                           vcol_name="Colors", build_materials=True):
     """Main-thread only: push precomputed mesh data into a Blender object."""
     if isinstance(mesh, NativeMeshData):
-        return _apply_native_mesh(obj, mesh, colors, mat_names, norms,
+        return _apply_native_mesh(obj, mesh, colors, mat_names, norms, uvs,
                                   vcol_name, build_materials)
     else:
         return _apply_trimesh(obj, mesh, colors, mat_names, norms, uvs,
                               vcol_name, build_materials)
 
 
-def _apply_native_mesh(obj, mesh, colors, mat_names, norms,
+def _apply_uv_layers(me, uvs):
+    """Write SurfaceUV / BoxUV layers per the active import UV options."""
+    if _uv_options.get("surface", True) and uvs is not None and len(uvs) > 0:
+        uv_mod.write_uv_layer(me, "SurfaceUV", uvs)
+    if _uv_options.get("box", False):
+        # Mesh verts are still in file units here (scale is baked later),
+        # so convert the world-unit tile size into file units.
+        unit_scale = _uv_options.get("unit_scale", 1.0) or 1.0
+        uv_mod.add_box_uv(
+            me, scale=_uv_options.get("box_scale", 1.0) / unit_scale)
+
+
+def _apply_native_mesh(obj, mesh, colors, mat_names, norms, uvs,
                        vcol_name, build_materials):
     """Fast path: from_pydata + foreach_set, no bmesh for geometry."""
     n_verts = len(mesh.verts)
@@ -494,7 +574,9 @@ def _apply_native_mesh(obj, mesh, colors, mat_names, norms,
             if mn is None:
                 r, g, b = q_bytes[fi]
                 mn = f"STEP_{r:02x}{g:02x}{b:02x}"
-            resolved_names.append(mn)
+            # Match add_material's 60-char truncation so the
+            # bpy.data.materials lookups below never miss
+            resolved_names.append(mn[:60])
 
         # Get unique material names and assign indices
         unique_names = list(dict.fromkeys(resolved_names))  # preserves order
@@ -544,6 +626,8 @@ def _apply_native_mesh(obj, mesh, colors, mat_names, norms,
 
     if norms is not None and len(norms) > 0:
         me.normals_split_custom_set(norms)
+
+    _apply_uv_layers(me, uvs)
 
     if prev_mode != "OBJECT":
         bpy.ops.object.mode_set(mode=prev_mode)
@@ -815,8 +899,20 @@ _ADDON_DIR = os.path.dirname(os.path.realpath(__file__))
 def _get_matdb_dir():
     """Return the MaterialDB folder inside the addon directory, creating it if needed."""
     d = os.path.join(_ADDON_DIR, "MaterialDB")
-    os.makedirs(d, exist_ok=True)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        # Read-only install (system-wide): callers treat a missing dir as
+        # "no databases"; raising here would crash the enum callback
+        pass
     return d
+
+
+def _sanitize_db_name(name):
+    """Strip path separators and other filesystem-hostile characters from a
+    user-typed database name."""
+    cleaned = "".join(c for c in name if c not in '<>:"/\\|?*').strip(" .")
+    return cleaned
 
 
 def _list_matdb_files():
@@ -832,10 +928,17 @@ def _list_matdb_files():
 
 def _matdb_enum_items(self, context):
     """Dynamic enum items for material database selection."""
+    global _matdb_enum_cache
     items = [("NONE", "None", "Do not use a material database")]
     for name, path in _list_matdb_files():
         items.append((name, name, f"Use material database: {name}"))
+    # Blender requires the returned strings to stay referenced from Python;
+    # module-level cache prevents garbage values in the dropdown
+    _matdb_enum_cache = items
     return items
+
+
+_matdb_enum_cache = []
 
 
 def _get_active_matdb_path(db_name=None):
@@ -1054,15 +1157,20 @@ def _apply_matdb_to_objects(objects, mappings):
     return replaced
 
 
-def _cleanup_unused_step_materials():
-    """Remove materials with zero users that were generated by STEP import."""
+def _cleanup_unused_step_materials(known_names=None):
+    """Remove zero-user materials that were generated by STEP import.
+
+    known_names: additional material names known to come from the import
+    (e.g. the original-name keys of the active matdb mappings) — CAD color
+    names like "GRAY" don't carry the STEP_ prefix.
+    """
     removed = 0
     # Iterate over a snapshot since we're modifying the collection
     for mat in list(bpy.data.materials):
-        if mat.users == 0 and (mat.name.startswith("STEP_") or not mat.name.startswith(".")):
-            # Only remove materials that look like STEP-generated ones
-            # (named colors like "GRAY", hex like "STEP_808080", etc.)
-            # Safety: only remove if truly zero users
+        if mat.users != 0:
+            continue
+        if mat.name.startswith("STEP_") or (known_names
+                                            and mat.name in known_names):
             bpy.data.materials.remove(mat)
             removed += 1
     if removed:
@@ -1081,20 +1189,45 @@ def load_step(
     htypes="TREE",
     apply_scale=True,
     material_database="NONE",
+    deflection_spec=None,
+    skip_construction=False,
+    uv_surface=True,
+    uv_box=False,
+    box_uv_scale=1.0,
+    import_curves=False,
 ):
     from . import importer
 
     global _debug_timing
     _debug_timing = _get_addon_prefs().debug_timing
 
-    hierarchy_flat, hierarchy_tree, hierarchy_empties = choose_hierarchy_types(htypes)
+    _uv_options["surface"] = uv_surface
+    _uv_options["box"] = uv_box
+    _uv_options["box_scale"] = box_uv_scale
 
-    filename = "".join(ntpath.basename(filepath).split(".")[:-1])
+    (hierarchy_flat, hierarchy_tree, hierarchy_empties,
+     hierarchy_instances) = choose_hierarchy_types(htypes)
+
+    # splitext, not split("."): multi-dot names ("part.rev2.step") must keep
+    # their dots, and extensionless names must not collapse to ""
+    filename = os.path.splitext(ntpath.basename(filepath))[0] or "STEP"
+
+    skip_prefixes = ()
+    if skip_construction:
+        skip_prefixes = tuple(
+            _get_addon_prefs().construction_filter_names.split(","))
 
     cached = _cache_get(filepath)
+    if cached is not None and cached._filter_key != frozenset(
+            p.strip().lower() for p in skip_prefixes if p.strip()):
+        cached = None  # different construction filter → re-read
     if cached is None:
+        from . import formats
         try:
-            step_reader = importer.ReadSTEP(filepath)
+            parse_t0 = time.time()
+            step_reader = formats.make_reader(
+                filepath, skip_name_prefixes=skip_prefixes)
+            _record_parse_calibration(step_reader, time.time() - parse_t0)
             _cache_put(filepath, step_reader)
         except AssertionError as e:
             print(e)
@@ -1105,12 +1238,28 @@ def load_step(
 
     tree = step_reader.tree
     scale = step_reader.scale
+
+    # Resolve deflection spec now that the file's unit scale is known
+    # (physical mode: same real-world deflection regardless of file units).
+    tessellation_relative = bool(
+        deflection_spec and deflection_spec.get("mode") == "relative")
+    if deflection_spec is not None:
+        lin_deflection, ang_deflection = import_ui.resolve_deflections(
+            deflection_spec, step_reader.scale, calculate_detail_level)
+        unit = "(relative factor)" if tessellation_relative else "file units"
+        print(f"Deflection resolved: {lin_deflection:.4f} {unit} "
+              f"/ {ang_deflection:.3f} rad")
+
     if custom_scale is not None:
         scale = custom_scale
 
     # divide by Blender unit length
     scale /= context.scene.unit_settings.scale_length
     print("Current Blender scale set at:", context.scene.unit_settings.scale_length)
+
+    # BoxUV tile size is specified in world units; meshes are built in file
+    # units, so the apply path needs the conversion factor.
+    _uv_options["unit_scale"] = scale
 
     wm = bpy.context.window_manager
 
@@ -1148,15 +1297,25 @@ def load_step(
         hacks.add("skip_solids")
     build_materials = _get_addon_prefs().build_materials
 
-    # Identify unique shapes (first occurrence per shape_name)
-    unique_shapes = {}  # shape_name -> (shp, part_name)
+    def _variant_name(tag, node):
+        """Mesh dedup key: shape tag, plus the instance color override when
+        present (instances with different override colors can't share mesh
+        data since materials are baked per face)."""
+        base = "tt_" + repr(tag)
+        if node.color_override is not None:
+            base += "|oc" + repr(node.color_override)
+        return base
+
+    # Identify unique shapes (first occurrence per variant)
+    unique_shapes = {}  # variant_name -> (shp, part_name, color_override)
     for shp, node_index in all_shapes:
         if shp is None:
             continue
-        _, _, tag, part_name, _, _, _ = tree.nodes[node_index].get_values()
-        shape_name = "tt_" + repr(tag)
+        node = tree.nodes[node_index]
+        _, _, tag, part_name, _, _, _ = node.get_values()
+        shape_name = _variant_name(tag, node)
         if shape_name not in unique_shapes:
-            unique_shapes[shape_name] = (shp, part_name)
+            unique_shapes[shape_name] = (shp, part_name, node.color_override)
 
     precomputed = {}  # shape_name -> (mesh, colors, mat_names, norms, uvs)
     n_unique = len(unique_shapes)
@@ -1165,13 +1324,14 @@ def load_step(
         precomp_start = time.time()
 
         last_pct_10 = 0
-        for si, (sname, (shp, part_name)) in enumerate(unique_shapes.items()):
+        for si, (sname, (shp, part_name, color_override)) in enumerate(unique_shapes.items()):
             try:
                 if _debug_timing:
                     t_shape = time.time()
                 precomputed[sname] = precompute_mesh_data(
                     step_reader, shp, lin_deflection, ang_deflection, hacks,
-                    part_name=part_name)
+                    part_name=part_name, fallback_color=color_override,
+                    relative=tessellation_relative)
                 if _debug_timing:
                     dt_shape = time.time() - t_shape
                     if dt_shape > 2.0:
@@ -1182,7 +1342,10 @@ def load_step(
 
             pct_10 = (100 * (si + 1) // n_unique) // 10 * 10
             if pct_10 > last_pct_10:
-                print(f"\n  Phase 1: {pct_10}%", end="", flush=True)
+                # Newline-terminated so the background reader thread sees
+                # each percentage immediately (end="" would delay every
+                # update until the next print's leading "\n")
+                print(f"\n  Phase 1: {pct_10}%", flush=True)
                 last_pct_10 = pct_10
 
         print(f"\nPre-compute done in {time.time() - precomp_start:.2f}s")
@@ -1208,14 +1371,17 @@ def load_step(
                 add_material(mname, col, link_vertex_color=False)
 
     print(f"\n--- Phase 2/3: Building {total} Blender objects ---")
+    instance_prototypes = {}  # variant_name -> prototype mesh object (instances mode)
+    _no_curve_shapes = set()  # variants with no free edges (curves mode)
     wm.progress_begin(0, total)
     for i, (shp, node_index) in enumerate(all_shapes):
-        parent_uuid, self_uuid, tag, name, _, local_t, global_t = tree.nodes[node_index].get_values()
+        node = tree.nodes[node_index]
+        parent_uuid, self_uuid, tag, name, _, local_t, global_t = node.get_values()
 
         if name == "root":
             name = filename + ".empties"
 
-        shape_name = "tt_" + repr(tag)
+        shape_name = _variant_name(tag, node)
         wm.progress_update(i)
         obj = None
 
@@ -1226,13 +1392,26 @@ def load_step(
                 print("[T" + repr(shp.ShapeType()) + "]", end="", flush=True)
 
             # If object already built, just copy it using linked mesh data
-            if shape_name in created_names:
+            if shape_name in created_names and created_names[shape_name] is None:
+                # Earlier occurrence produced no geometry and was removed
+                # (skip_empty_objects) — don't rebuild and re-report it for
+                # every further occurrence of the same shape.
+                pass
+            elif shape_name in created_names:
                 if _debug_timing:
                     print("[Link]", end="", flush=True)
 
-                source_obj = created_names[shape_name]
-                obj = source_obj.copy()
-                created_objs.append(obj)
+                if hierarchy_instances:
+                    # Occurrence becomes a collection-instance empty later;
+                    # just record which prototype it instances.
+                    obj = bpy.data.objects.new(name, None)
+                    obj.empty_display_size = 0.0001
+                    obj["STEP_instance_of"] = shape_name
+                    created_objs.append(obj)
+                else:
+                    source_obj = created_names[shape_name]
+                    obj = source_obj.copy()
+                    created_objs.append(obj)
             else:
                 if _debug_timing:
                     print("[Build]", end="", flush=True)
@@ -1257,13 +1436,60 @@ def load_step(
                         bpy.data.objects.remove(obj)
                         bpy.data.meshes.remove(mesh_data)
                         obj = None
+                        # Remember the shape as known-empty so repeated
+                        # occurrences are skipped instead of rebuilt
+                        created_names[shape_name] = None
 
                 if obj is not None:
-                    created_objs.append(obj)
                     created_names[shape_name] = obj
+                    if hierarchy_instances:
+                        # First occurrence: keep the mesh object as a hidden
+                        # prototype; this occurrence becomes an instance empty.
+                        proto = obj
+                        proto["STEP_tag"] = tag
+                        proto["STEP_file"] = filepath
+                        proto["STEP_name"] = name
+                        proto["STEP_tree_location"] = node_index
+                        proto["STEP_applied_scale"] = scale if apply_scale else 0.0
+                        if proto.data is not None and proto.data.materials:
+                            proto["STEP_materials"] = json.dumps(
+                                [m.name if m else "" for m in proto.data.materials])
+                        instance_prototypes[shape_name] = proto
+                        obj = bpy.data.objects.new(name, None)
+                        obj.empty_display_size = 0.0001
+                        obj["STEP_instance_of"] = shape_name
+                        created_objs.append(obj)
+                    else:
+                        created_objs.append(obj)
+
+            # Free-edge curves (sketches, construction wires) as curve
+            # objects — also for parts whose mesh came out empty (sketch-only
+            # parts are exactly the ones that need this).
+            if import_curves and not hierarchy_instances:
+                ckey = shape_name + "|curves"
+                cobj = None
+                if ckey in created_names:
+                    cobj = created_names[ckey].copy()  # linked curve data
+                elif ckey not in _no_curve_shapes:
+                    polylines = curves_mod.extract_free_curves(
+                        shp, lin_deflection, ang_deflection)
+                    if polylines:
+                        cobj = curves_mod.build_curve_object(
+                            bpy, name + ".curves", polylines)
+                        created_names[ckey] = cobj
+                    else:
+                        _no_curve_shapes.add(ckey)
+                if cobj is not None:
+                    cobj["STEP_tag"] = tag
+                    cobj["STEP_parent"] = parent_uuid
+                    cobj["STEP_file"] = filepath
+                    cobj["STEP_name"] = name + ".curves"
+                    cobj["STEP_tree_location"] = node_index
+                    cobj["STEP_applied_scale"] = scale if apply_scale else 0.0
+                    created_objs.append(cobj)
 
         # No shape in leaf, empty creation enabled, do this
-        elif hierarchy_empties:
+        elif hierarchy_empties or hierarchy_instances:
             # Create empty
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_size = 2
@@ -1281,6 +1507,14 @@ def load_step(
             obj["STEP_name"] = name
             obj["STEP_tree_location"] = node_index
             obj["STEP_applied_scale"] = scale if apply_scale else 0.0
+            obj["STEP_import_settings"] = json.dumps({
+                "lin_deflection": lin_deflection,
+                "ang_deflection": ang_deflection,
+                "uv_surface": _uv_options["surface"],
+                "uv_box": _uv_options["box"],
+                "box_uv_scale": _uv_options["box_scale"],
+                "unit_scale": scale,
+            })
             # Store original STEP material names for material database feature
             if obj.data is not None and hasattr(obj.data, 'materials') and obj.data.materials:
                 obj["STEP_materials"] = json.dumps([m.name if m else "" for m in obj.data.materials])
@@ -1372,15 +1606,87 @@ def load_step(
                 obj.parent = parent
                 obj.matrix_parent_inverse = parent.matrix_world.inverted()
 
+    # build collection-instance hierarchy: prototypes live in a hidden
+    # ".components" collection; every occurrence is an instancing empty
+    # parented like the EMPTIES mode.
+    if hierarchy_instances:
+        components_col = bpy.data.collections.new(filename + ".components")
+        bpy.context.scene.collection.children.link(components_col)
+
+        part_collections = {}
+        for vname, proto in instance_prototypes.items():
+            obj_unlink_all(proto)
+            col_name = proto["STEP_name"]
+            if len(col_name) > 50:
+                col_name = col_name[:25] + "_" + col_name[-25:]
+            part_col = bpy.data.collections.new(col_name)
+            components_col.children.link(part_col)
+            part_col.objects.link(proto)
+            proto.matrix_world = Matrix.Identity(4)
+            part_collections[vname] = part_col
+
+        for obj in created_objs:
+            global_t = tree.nodes[obj["STEP_tree_location"]].global_transform
+            set_obj_matrix_world(obj, global_t)
+            bpy.context.scene.collection.objects.link(obj)
+
+            vname = obj.get("STEP_instance_of")
+            if vname is not None and vname in part_collections:
+                obj.instance_type = "COLLECTION"
+                obj.instance_collection = part_collections[vname]
+
+            parent_id = obj["STEP_parent"]
+            if parent_id in created_uuid:
+                parent = created_uuid[parent_id]
+                obj.parent = parent
+                obj.matrix_parent_inverse = parent.matrix_world.inverted()
+
+        # Hide the components collection in the view layer
+        def _find_layer_col(layer_col, target):
+            if layer_col.collection == target:
+                return layer_col
+            for child in layer_col.children:
+                found = _find_layer_col(child, target)
+                if found is not None:
+                    return found
+            return None
+
+        lc = _find_layer_col(bpy.context.view_layer.layer_collection, components_col)
+        if lc is not None:
+            lc.exclude = True
+
     # Apply material database replacements (before transforms)
     db_path = _get_active_matdb_path(material_database)
     if db_path:
         mappings = _ensure_matdb_materials(db_path)
-        _apply_matdb_to_objects(created_objs, mappings)
-        _cleanup_unused_step_materials()
+        matdb_targets = list(created_objs)
+        if hierarchy_instances:
+            matdb_targets.extend(instance_prototypes.values())
+        _apply_matdb_to_objects(matdb_targets, mappings)
+        _cleanup_unused_step_materials(known_names=set(mappings))
 
     print(f"\n--- Phase 3/3: Applying transforms ---")
     transform_to_up(up_as[0], created_objs, scale, apply_scale=apply_scale)
+
+    if hierarchy_instances and apply_scale and scale != 1.0:
+        # Instance empties carry the scene scale in their matrices after
+        # transform_to_up; bake it into the prototype meshes instead and
+        # reset the empties, matching apply_scale semantics.
+        processed_meshes = set()
+        for proto in instance_prototypes.values():
+            me = proto.data
+            if me is not None and me not in processed_meshes:
+                vert_count = len(me.vertices)
+                if vert_count > 0:
+                    verts = np.empty(vert_count * 3, dtype=np.float32)
+                    me.vertices.foreach_get("co", verts)
+                    verts *= scale
+                    me.vertices.foreach_set("co", verts)
+                    me.update()
+                processed_meshes.add(me)
+        for obj in created_objs:
+            loc, rot, _ = obj.matrix_world.decompose()
+            obj.matrix_world = Matrix.LocRotScale(loc, rot, Vector((1.0, 1.0, 1.0)))
 
     wm.progress_end()
     elapsed = time.time() - start_time
@@ -1404,6 +1710,8 @@ def load_step(
     if step_reader.skipped_shapes:
         print(f"  Skipped: {len(step_reader.skipped_shapes)} shapes")
         has_problems = True
+    if step_reader.filtered_labels:
+        print(f"  Construction filter skipped: {len(step_reader.filtered_labels)} subtrees")
     if step_reader.recovered_parts:
         print(f"  Recovered parts ({len(step_reader.recovered_parts)}):")
         for rp_name in step_reader.recovered_parts:
@@ -1436,14 +1744,17 @@ class PG_Stepper(bpy.types.PropertyGroup):
     """
     detail_level: bpy.props.IntProperty(
         name="Mesh detail",
-        description="How detailed you want the mesh to be",
+        description="Tessellation detail level (100 = balanced default). "
+                    "Higher values produce more polygons",
         default=100,
         min=1,
     )
 
     lin_deflection: bpy.props.FloatProperty(
         name="Linear deflection",
-        description="Smaller values increase polygon count. Higher values lower polygon count.",
+        description="Maximum distance between the mesh and the true "
+                    "surface, in file units. Smaller values produce more "
+                    "polygons",
         default=0.8,
         min=0.002,
         # max=2.0,
@@ -1451,7 +1762,8 @@ class PG_Stepper(bpy.types.PropertyGroup):
 
     ang_deflection: bpy.props.FloatProperty(
         name="Angular deflection",
-        description="Smaller values increase polygon count. Higher values lower polygon count.",
+        description="Maximum angle between adjacent facets, in radians. "
+                    "Smaller values produce more polygons",
         default=0.5,
         min=0.002,
         # max=2.0,
@@ -1478,13 +1790,18 @@ class PG_Stepper(bpy.types.PropertyGroup):
 class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.occ_import_step"
     bl_label = "Import STEP"
-    bl_description = "Import a STEP file"
+    bl_description = "Import a STEP, IGES or BREP CAD file"
     bl_options = {"PRESET"}
 
-    filter_glob: StringProperty(default="*.step;*.stp;*.st", options={"HIDDEN"})
-    files: bpy.props.CollectionProperty(type=bpy.types.PropertyGroup)
-    # files: bpy.props.CollectionProperty(type=idprop.types.IDPropertyGroup)
-    override_file: StringProperty(default="", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.step;*.stp;*.st;*.iges;*.igs;*.brep;*.brp", options={"HIDDEN"})
+    # SKIP_SAVE on every file-selection property: drops and dialogs must
+    # never inherit a previous invocation's file list (a stale `files` entry
+    # made drag & drop re-import the previously imported file).
+    filepath: StringProperty(subtype="FILE_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    files: bpy.props.CollectionProperty(
+        type=bpy.types.PropertyGroup, options={"HIDDEN", "SKIP_SAVE"})
+    directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    override_file: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
 
     fw_as: bpy.props.EnumProperty(
         items=[
@@ -1502,11 +1819,13 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     up_as: bpy.props.EnumProperty(
         items=[
-            ("XPOS", "X", "", 0),
+            ("XPOS", "X", "The file's X axis becomes Blender's up axis", 0),
             # ("XNEG", "X-", "", 1),
-            ("YPOS", "Y", "", 2),
+            ("YPOS", "Y", "The file's Y axis becomes Blender's up axis "
+             "(most CAD packages)", 2),
             # ("YNEG", "Y-", "", 3),
-            ("ZPOS", "Z", "", 4),
+            ("ZPOS", "Z", "The file's Z axis becomes Blender's up axis "
+             "(no rotation applied)", 4),
             # ("ZNEG", "Z-", "", 5),
         ],
         name="Up",
@@ -1516,21 +1835,34 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     hierarchy_types: bpy.props.EnumProperty(
         items=[
-            ("FLAT", "Flat collection", "", 2),
-            ("TREE", "Tree collection", "", 4),
-            ("EMPTIES", "Parented empties", "", 6),
+            ("FLAT", "Flat collection",
+             "All objects in a single collection, no hierarchy", 2),
+            ("TREE", "Tree collection",
+             "Nested collections mirroring the CAD assembly tree", 4),
+            ("EMPTIES", "Parented empties",
+             "Objects parented under empties mirroring the CAD assembly "
+             "tree", 6),
+            ("COLLECTION_INSTANCES", "Collection instances",
+             "Repeated parts become collection instances (lightest scenes)", 8),
             # ("FLAT_AND_TREE", "Flat and tree collection", "", 0),
         ],
         name="Tree hierarchy",
         default="EMPTIES",
-        description="Organization styles of objects",
+        description="How the imported assembly structure is organized in "
+                    "the scene",
     )
 
-    user_scale: bpy.props.FloatProperty(name="Scale", description="Set object scale", default=0.01, min=0.00001)
+    user_scale: bpy.props.FloatProperty(
+        name="Scale",
+        description="Scale factor used instead of the unit information in "
+                    "the file (only used when Custom Scale is enabled)",
+        default=0.01, min=0.00001)
 
     lin_deflection: bpy.props.FloatProperty(
         name="Linear deflection",
-        description="Smaller values increase polygon count. Higher values lower polygon count.",
+        description="Maximum distance between the mesh and the true "
+                    "surface, in file units. Smaller values produce more "
+                    "polygons",
         default=0.8,
         min=0.002,
         max=2.0,
@@ -1538,7 +1870,8 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     ang_deflection: bpy.props.FloatProperty(
         name="Angular deflection",
-        description="Smaller values increase polygon count. Higher values lower polygon count.",
+        description="Maximum angle between adjacent facets, in radians. "
+                    "Smaller values produce more polygons",
         default=0.5,
         min=0.002,
         max=2.0,
@@ -1546,7 +1879,8 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     detail_level: bpy.props.IntProperty(
         name="Mesh detail",
-        description="How detailed you want the mesh to be",
+        description="Tessellation detail level (100 = balanced default). "
+                    "Higher values produce more polygons",
         default=100,
         min=1,
     )
@@ -1569,78 +1903,166 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
         description="Replace STEP materials using a material database",
     )
 
+    quality_preset: bpy.props.EnumProperty(
+        items=import_ui.QUALITY_PRESET_ITEMS,
+        name="Quality",
+        description="Tessellation quality preset (physical deflection, "
+                    "independent of the file's unit system)",
+        default="BALANCED",
+    )
+
+    lin_deflection_len: bpy.props.FloatProperty(
+        name="Linear deflection",
+        description="Maximum distance between the mesh and the true surface. "
+                    "Smaller values increase polygon count",
+        unit="LENGTH",
+        default=0.0008,
+        min=0.000002,
+        soft_max=0.01,
+        precision=4,
+    )
+
+    ang_deflection_rot: bpy.props.FloatProperty(
+        name="Angular deflection",
+        description="Maximum angle between adjacent mesh faces. "
+                    "Smaller values increase polygon count",
+        unit="ROTATION",
+        default=0.5,
+        min=0.002,
+        max=1.5,
+    )
+
+    skip_construction: bpy.props.BoolProperty(
+        name="Skip construction geometry",
+        description="Skip parts whose names match the construction-geometry "
+                    "filters in the addon preferences (sketches, axes, wires...)",
+        default=False,
+    )
+
+    uv_surface: bpy.props.BoolProperty(
+        name="Surface UVs",
+        description="Create a 'SurfaceUV' layer from the CAD parametric "
+                    "surface coordinates (one normalized island per CAD face)",
+        default=True,
+    )
+
+    uv_box: bpy.props.BoolProperty(
+        name="Box UVs",
+        description="Create an additional 'BoxUV' layer using triplanar box "
+                    "projection in world units",
+        default=False,
+    )
+
+    box_uv_scale: bpy.props.FloatProperty(
+        name="Box UV size",
+        description="World size of one UV tile for the BoxUV layer",
+        unit="LENGTH",
+        default=1.0,
+        min=0.0001,
+    )
+
+    import_curves: bpy.props.BoolProperty(
+        name="Import curves",
+        description="Import free edges (sketches, construction wires) as "
+                    "curve objects",
+        default=False,
+    )
+
+    tessellation_relative: bpy.props.BoolProperty(
+        name="Relative tessellation",
+        description="Scale deflection with each feature's size: small parts "
+                    "keep detail, large parts don't explode triangle counts. "
+                    "Also enables parallel meshing",
+        default=False,
+    )
+
+    lin_deflection_rel: bpy.props.FloatProperty(
+        name="Relative deflection",
+        description="Deflection as a fraction of each edge's size "
+                    "(smaller = finer mesh)",
+        default=0.005,
+        min=0.00001,
+        max=0.5,
+        precision=4,
+    )
+
     def draw(self, context):
-        layout = self.layout
-
-        def spacer(inpl):
-            row = inpl.row()
-            row.ui_units_y = 0.5
-            row.label(text="")
-            return row
-
-        row = layout.row()
-
-        row.label(text="STEPper NEXT import options:")
-
-        col = layout.box()
-        col = col.column(align=True)
-
-        row = col.row()
-        row.prop(self, "custom_scale")
-        if self.custom_scale:
-            row = col.row()
-            row.prop(self, "user_scale")
-
-        row = col.row()
-        row.prop(self, "apply_scale")
-
-        if _get_addon_prefs().simpler_parameters:
-            row = col.row()
-            row.prop(self, "detail_level")
-
-        else:
-            row = col.row()
-            row.prop(self, "lin_deflection")
-
-            row = col.row()
-            row.prop(self, "ang_deflection")
-
-        # row = col.row()
-        # row.prop(prg, "fw_as")
-
-        row = col.row()
-        row.prop(self, "up_as")
-
-        row = col.row()
-        row.prop(self, "hierarchy_types", text="Hierarchy")
-
-        spacer(col)
-        row = col.row()
-        row.prop(self, "material_database", text="Material DB")
+        import_ui.draw_import_dialog(self, self.layout, _get_addon_prefs())
 
     def invoke(self, context, event):
-        # Default the material database dropdown to the addon preference
         prefs = _get_addon_prefs()
+        import_ui.seed_from_prefs(self, prefs)
+        # Default the material database dropdown to the addon preference
         if prefs.active_matdb and prefs.active_matdb != "NONE":
             # Verify it's still a valid option
             valid = {name for name, _ in _list_matdb_files()}
             if prefs.active_matdb in valid:
                 self.material_database = prefs.active_matdb
+        # Drag & drop (FileHandler) pre-populates directory+files (multi
+        # drop) or filepath (single drop) — thanks to SKIP_SAVE these are
+        # only ever set by an actual drop. Show the options dialog instead
+        # of the file browser in that case.
+        if (self.directory and len(self.files) > 0) or self.filepath:
+            return context.window_manager.invoke_props_dialog(self, width=400)
         return super().invoke(context, event)
 
-    def execute(self, context):
-        folder = os.path.dirname(self.filepath)
+    def _background_kwargs(self):
+        """Operator settings forwarded verbatim to the worker's operator."""
+        kwargs = {
+            "up_as": self.up_as,
+            "hierarchy_types": self.hierarchy_types,
+            "user_scale": self.user_scale,
+            "custom_scale": self.custom_scale,
+            "apply_scale": self.apply_scale,
+            "material_database": self.material_database,
+            "detail_level": self.detail_level,
+            "skip_construction": self.skip_construction,
+            "uv_surface": self.uv_surface,
+            "uv_box": self.uv_box,
+            "box_uv_scale": self.box_uv_scale,
+            "import_curves": self.import_curves,
+            "tessellation_relative": self.tessellation_relative,
+            "lin_deflection_rel": self.lin_deflection_rel,
+        }
+        # Mode-selecting props keep their "explicitly set" semantics
+        for prop in ("quality_preset", "lin_deflection", "ang_deflection",
+                     "lin_deflection_len", "ang_deflection_rot"):
+            if self.properties.is_property_set(prop):
+                kwargs[prop] = getattr(self, prop)
+        return kwargs
 
-        # print(type(self.files))
-        # print(dir(self.files))
-        l_def, a_def = self.lin_deflection, self.ang_deflection
-        if _get_addon_prefs().simpler_parameters:
-            a_def, l_def = calculate_detail_level(self.detail_level)
+    def execute(self, context):
+        folder = self.directory or os.path.dirname(self.filepath)
+
+        deflection_spec = import_ui.make_deflection_spec(self, _get_addon_prefs())
 
         import_files = [i.name for i in self.files]
+        # Single-file drop (or scripted call) sets only filepath
+        if not import_files and self.filepath:
+            import_files = [os.path.basename(self.filepath)]
 
         if self.override_file != "":
             import_files = [self.override_file]
+
+        if not import_files:
+            self.report({"ERROR"}, "No file selected")
+            return {"CANCELLED"}
+
+        # Route large imports through the background worker (UI stays
+        # responsive). Headless sessions and reload/rebuild paths stay sync.
+        if self.override_file == "":
+            full_paths = [os.path.join(folder, i) for i in import_files]
+            if background_mod.should_background(
+                    _get_addon_prefs(), full_paths, bpy.app.background):
+                job = {"files": full_paths,
+                       "op_kwargs": self._background_kwargs(),
+                       # Result-affecting addon preferences travel with the
+                       # job — the worker runs factory-startup and would
+                       # otherwise import with default prefs
+                       "prefs": background_mod.prefs_snapshot(
+                           _get_addon_prefs())}
+                bpy.ops.stepper.background_import(job_json=json.dumps(job))
+                return {"FINISHED"}
 
         # iterate through the selected files
         all_failed_parts = []
@@ -1653,12 +2075,16 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
                 context,
                 path_to_file,
                 custom_scale=self.user_scale if self.custom_scale else None,
-                lin_deflection=l_def,
-                ang_deflection=a_def,
+                deflection_spec=deflection_spec,
                 up_as=self.up_as,
                 htypes=self.hierarchy_types,
                 apply_scale=self.apply_scale,
                 material_database=self.material_database,
+                skip_construction=self.skip_construction,
+                uv_surface=self.uv_surface,
+                uv_box=self.uv_box,
+                box_uv_scale=self.box_uv_scale,
+                import_curves=self.import_curves,
             )
             if result is False:
                 self.report({"ERROR"}, "STEP file could not be opened. Possibly damaged file.")
@@ -1722,7 +2148,9 @@ class STEP_OT_FixASCII(bpy.types.Operator):
         print(p.stat().st_size // 1024, "kB")
 
         outf = Path(p.parent, Path(p.stem.replace(" ", "_") + "_fix.step"))
-        with outf.open("w", encoding="ASCII") as fo:
+        # newline="\n": default newline translation would reintroduce the
+        # CRLF line endings this tool just stripped (Windows)
+        with outf.open("w", encoding="ASCII", newline="\n") as fo:
             with p.open("rb") as f:
                 content = bytearray(f.read())
                 content = content.replace(b"\r\n", b"\n")
@@ -1745,8 +2173,10 @@ class STEP_OT_PrintDebug(bpy.types.Operator):
     def execute(self, context):
         from pathlib import Path
 
-        print("Attempting to format STEP file as ASCII")
-        i_file = context.scene.stepper.print_debug
+        print("Printing STEP debug info")
+        # Shares the Debug panel's file field (there is no separate
+        # print_debug property)
+        i_file = context.scene.stepper.fix_ascii_file
         p = Path(i_file)
         if i_file == "" or not p.exists():
             self.report(
@@ -1759,7 +2189,7 @@ class STEP_OT_PrintDebug(bpy.types.Operator):
 
         from . import stepanalyzer
 
-        SA = stepanalyzer.StepAnalyzer(filename=p)
+        SA = stepanalyzer.StepAnalyzer(filename=str(p))
         print(SA.dump())
 
         self.report(
@@ -1779,11 +2209,18 @@ class STEP_OT_ReloadSTEP(bpy.types.Operator):
         return context.object is not None and "STEP_file" in context.object
 
     def execute(self, context):
-        from . import importer
+        from . import formats
 
         filepath = context.object["STEP_file"]
-        step_reader = importer.ReadSTEP(filepath)
+        try:
+            # make_reader dispatches on extension (STEP/IGES/BREP)
+            step_reader = formats.make_reader(filepath)
+        except Exception as e:
+            self.report({"ERROR"}, f"Could not reload {filepath}: {e}")
+            return {"CANCELLED"}
         _cache_put(filepath, step_reader)
+        self.report({"INFO"},
+                    f"Reloaded {os.path.basename(filepath)} into the cache")
         return {"FINISHED"}
 
 
@@ -1809,7 +2246,10 @@ class STEP_OT_ClearFileCache(bpy.types.Operator):
 class STEP_OT_RebuildSelected(bpy.types.Operator):
     bl_idname = "object.occ_rebuild_selected"
     bl_label = "Rebuild selected objects from the STEP file"
-    bl_description = "Experimental: Causes issues on some shapes\n" + bl_label
+    bl_description = ("Rebuild selected objects from the STEP file.\n"
+                      "Legacy tool — prefer 'Regenerate Selected' in the "
+                      "Tools panel.\nExperimental: causes issues on some "
+                      "shapes")
 
     @classmethod
     def poll(cls, context):
@@ -1821,7 +2261,14 @@ class STEP_OT_RebuildSelected(bpy.types.Operator):
         curname = ""
         build_tags = set()
         rebuilt_meshes = set()
-        my_selection = list(context.selected_objects)
+        # Only mesh objects that carry STEP metadata can be rebuilt — a
+        # box-select of an imported assembly also contains hierarchy empties
+        my_selection = [o for o in context.selected_objects
+                        if o.data is not None
+                        and "STEP_tag" in o and "STEP_file" in o]
+        if not my_selection:
+            self.report({"WARNING"}, "No rebuildable STEP objects selected")
+            return {"CANCELLED"}
 
         ang_def = context.scene.stepper.ang_deflection
         lin_def = context.scene.stepper.lin_deflection
@@ -1839,9 +2286,9 @@ class STEP_OT_RebuildSelected(bpy.types.Operator):
         wm = bpy.context.window_manager
         wm.progress_begin(0, len(my_selection))
         for progress_count, obj in enumerate(my_selection):
+            sel_tag = obj["STEP_tag"]
             if obj.data.name not in meshes:
                 meshes[obj.data.name] = obj.data
-                sel_tag = obj["STEP_tag"]
                 prevname = curname
                 curname = obj["STEP_file"]
             else:
@@ -1922,12 +2369,16 @@ class STEP_OT_MatDBCreate(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        name = self.db_name.strip()
+        name = _sanitize_db_name(self.db_name)
         if not name:
             self.report({'ERROR'}, "Database name cannot be empty")
             return {'CANCELLED'}
 
         filepath = os.path.join(_get_matdb_dir(), name + ".blend")
+        if os.path.exists(filepath):
+            self.report({'ERROR'}, f"Database '{name}' already exists — "
+                        "choose another name or delete it first")
+            return {'CANCELLED'}
 
         mappings = _scan_scene_materials()
         if not mappings:
@@ -1968,7 +2419,7 @@ class STEP_OT_MatDBDuplicate(bpy.types.Operator):
     def execute(self, context):
         import shutil
 
-        name = self.db_name.strip()
+        name = _sanitize_db_name(self.db_name)
         if not name:
             self.report({'ERROR'}, "Database name cannot be empty")
             return {'CANCELLED'}
@@ -2120,6 +2571,15 @@ class STEP_OT_MatDBApply(bpy.types.Operator):
     def execute(self, context):
         stepper = context.scene.stepper
 
+        # invoke() prepares _mappings; a direct execute call (redo panel,
+        # scripts) must load them itself
+        mappings = getattr(self, "_mappings", None)
+        if mappings is None:
+            mappings = _ensure_matdb_materials(_get_active_matdb_path())
+        if not mappings:
+            self.report({'WARNING'}, "No mappings found in database")
+            return {'CANCELLED'}
+
         if stepper.mat_db_apply_selection_only:
             objects = list(context.selected_objects)
         else:
@@ -2130,8 +2590,8 @@ class STEP_OT_MatDBApply(bpy.types.Operator):
             self.report({'WARNING'}, "No STEP objects found")
             return {'CANCELLED'}
 
-        replaced = _apply_matdb_to_objects(objects, self._mappings)
-        _cleanup_unused_step_materials()
+        replaced = _apply_matdb_to_objects(objects, mappings)
+        _cleanup_unused_step_materials(known_names=set(mappings))
         self.report({'INFO'}, f"Replaced {replaced} material(s) across {len(objects)} object(s)")
         return {'FINISHED'}
 
@@ -2208,7 +2668,7 @@ class STEP_PT_MaterialDB(bpy.types.Panel):
 
 
 class STEP_PT_STEPper(bpy.types.Panel):
-    bl_label = "STEPper NEXT: Build"
+    bl_label = "STEPper NEXT: Tools"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "STEPper NEXT"
@@ -2218,33 +2678,29 @@ class STEP_PT_STEPper(bpy.types.Panel):
 
         layout = self.layout
 
-        # def spacer(inpl):
-        #     row = inpl.row()
-        #     row.ui_units_y = 0.5
-        #     row.label(text="")
-        #     return row
-
-        row = layout.row()
-        col = row.column(align=True)
-
-        # row = col.row()
-        # row.prop(prg, "merge_distance")
-
+        # These resolution values feed the Regenerate operator below (with
+        # its "Use STEPper Panel Resolution" option, on by default)
+        box = layout.box()
+        col = box.column(align=True)
+        col.label(text="Regenerate Resolution:")
         if _get_addon_prefs().simpler_parameters:
-            row = col.row()
-            row.prop(prg, "detail_level")
-
+            col.prop(prg, "detail_level")
         else:
-            row = col.row()
-            row.prop(prg, "lin_deflection")
+            col.prop(prg, "lin_deflection")
+            col.prop(prg, "ang_deflection")
+        box.operator("stepper.regenerate", text="Regenerate Selected",
+                     icon='FILE_REFRESH')
 
-            row = col.row()
-            row.prop(prg, "ang_deflection")
-
-        layout = self.layout
-        # layout.label(text="Used memory: {}".format(total_size(global_file_cache)))
-        row = layout.row()
-        row.operator(STEP_OT_RebuildSelected.bl_idname, text="Rebuild selected")
+        col = layout.column(align=True)
+        row = col.row(align=True)
+        row.operator("stepper.prune_hierarchy", text="Prune Hierarchy",
+                     icon='X')
+        row.operator("stepper.prune_restore", text="Restore",
+                     icon='LOOP_BACK')
+        row = col.row(align=True)
+        row.operator("stepper.mesh_cleanup", text="Clean Up Meshes",
+                     icon='MESH_DATA')
+        row.operator("stepper.add_box_uv", text="Add BoxUV", icon='UV')
 
 
 class STEP_PT_STEPper_Reload(bpy.types.Panel):
@@ -2255,12 +2711,18 @@ class STEP_PT_STEPper_Reload(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        row = layout.row()
-        row.operator(STEP_OT_ReloadSTEP.bl_idname, text="Reload STEP file")
-        row = layout.row()
-        row.operator(STEP_OT_ClearFileCache.bl_idname, text="Clear this file from cache")
-        row = layout.row()
-        row.operator(STEP_OT_ClearCache.bl_idname, text="Clear all cache")
+        col = layout.column(align=True)
+        col.operator("stepper.batch_import_folder",
+                     text="Batch Import Folder", icon='FILE_FOLDER')
+        col.operator("stepper.analyze_file", text="Analyze STEP File",
+                     icon='VIEWZOOM')
+        col = layout.column(align=True)
+        col.operator(STEP_OT_ReloadSTEP.bl_idname, text="Reload STEP File",
+                     icon='FILE_REFRESH')
+        col.operator(STEP_OT_ClearFileCache.bl_idname,
+                     text="Clear This File From Cache", icon='TRASH')
+        col.operator(STEP_OT_ClearCache.bl_idname, text="Clear All Cache",
+                     icon='TRASH')
         row = layout.row()
         row.label(text=f"Cached files: {len(global_file_cache)}/{MAX_FILE_CACHE}")
 
@@ -2270,6 +2732,7 @@ class STEP_PT_STEPper_Debug(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "STEPper NEXT"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -2365,6 +2828,69 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         description="Active material database for import",
     )
 
+    preferred_up_axis: bpy.props.EnumProperty(
+        items=[("XPOS", "X", "", 0), ("YPOS", "Y", "", 2), ("ZPOS", "Z", "", 4)],
+        name="Default up axis",
+        description="Up axis preselected in the import dialog",
+        default="YPOS",
+    )
+
+    preferred_hierarchy: bpy.props.EnumProperty(
+        items=[
+            ("FLAT", "Flat collection",
+             "All objects in a single collection, no hierarchy", 2),
+            ("TREE", "Tree collection",
+             "Nested collections mirroring the CAD assembly tree", 4),
+            ("EMPTIES", "Parented empties",
+             "Objects parented under empties mirroring the CAD assembly "
+             "tree", 6),
+            ("COLLECTION_INSTANCES", "Collection instances",
+             "Repeated parts become collection instances (lightest "
+             "scenes)", 8),
+        ],
+        name="Default hierarchy",
+        description="Hierarchy mode preselected in the import dialog",
+        default="EMPTIES",
+    )
+
+    default_quality_preset: bpy.props.EnumProperty(
+        items=import_ui.QUALITY_PRESET_ITEMS,
+        name="Default quality",
+        description="Quality preset preselected in the import dialog",
+        default="BALANCED",
+    )
+
+    background_import: bpy.props.BoolProperty(
+        name="Background import",
+        description="Import in a background process so Blender stays "
+                    "responsive (Esc cancels). Small files still import "
+                    "directly",
+        default=True,
+    )
+
+    background_min_mb: bpy.props.FloatProperty(
+        name="Background threshold (MB)",
+        description="Files smaller than this import synchronously "
+                    "(background startup overhead isn't worth it)",
+        default=2.0,
+        min=0.0,
+    )
+
+    perf_calibration: bpy.props.StringProperty(
+        name="Performance calibration",
+        description="Per-machine import speed data used by the analyzer "
+                    "(managed automatically)",
+        default="{}",
+    )
+
+    construction_filter_names: bpy.props.StringProperty(
+        name="Construction name filters",
+        description="Comma-separated name prefixes skipped when "
+                    "'Skip construction geometry' is enabled on import",
+        default="Axes,Sketches,Lines,Hatches,Wires,Curves,Construction,"
+                "Annotations,Planes,Origin",
+    )
+
     def draw(self, context):
         layout = self.layout
 
@@ -2400,9 +2926,21 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         row = layout.row()
         row.prop(self, "active_matdb")
 
+        col = layout.box().column(align=True)
+        col.label(text="Import dialog defaults:")
+        col.prop(self, "preferred_up_axis")
+        col.prop(self, "preferred_hierarchy")
+        col.prop(self, "default_quality_preset")
+        col.prop(self, "construction_filter_names")
+
+        col = layout.box().column(align=True)
+        col.prop(self, "background_import")
+        if self.background_import:
+            col.prop(self, "background_min_mb")
+
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportStepCADOperator.bl_idname, text="STEP (.step, .stp) [STEPper NEXT]")
+    self.layout.operator(ImportStepCADOperator.bl_idname, text="STEP/IGES/BREP CAD [STEPper NEXT]")
 
 
 classes = (
@@ -2428,7 +2966,9 @@ classes = (
     STEP_PT_STEPper_Reload,
     STEP_PT_MaterialDB,
     STEP_PT_STEPper_Debug,
-)
+) + (import_ui.classes + uv_mod.classes + tools_mod.classes
+     + curves_mod.classes + formats_classes + analyzer_mod.classes
+     + background_mod.classes)
 
 
 def register():

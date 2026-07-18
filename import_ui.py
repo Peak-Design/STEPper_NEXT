@@ -1,0 +1,255 @@
+# Import dialog UI, quality presets, preference seeding, drag & drop and
+# folder batch import for STEPper NEXT.
+#
+# The import operator class lives in main.py (registration hub); this module
+# holds the preset table, deflection resolution and the dialog draw code so
+# main.py stops growing.
+
+import os
+
+import bpy
+
+STEP_EXTENSIONS = (".step", ".stp", ".st", ".iges", ".igs", ".brep", ".brp")
+
+# Quality presets: name -> (linear deflection in METERS, angular in RADIANS).
+# BALANCED reproduces the historical defaults (0.8 file units on a mm file).
+QUALITY_PRESETS = {
+    "DRAFT": (0.002, 0.6),
+    "BALANCED": (0.0008, 0.5),
+    "FINE": (0.0002, 0.25),
+    "ULTRA": (0.00005, 0.1),
+}
+
+QUALITY_PRESET_ITEMS = [
+    ("DRAFT", "Draft", "Fast preview quality (2 mm deflection)", 0),
+    ("BALANCED", "Balanced", "Good default quality (0.8 mm deflection)", 1),
+    ("FINE", "Fine", "High quality (0.2 mm deflection)", 2),
+    ("ULTRA", "Ultra Fine", "Maximum quality (0.05 mm deflection)", 3),
+    ("CUSTOM", "Custom", "Manually set linear/angular deflection", 4),
+]
+
+# Operators seeded from preferences this session (keyed by operator idname)
+_session_seeded = set()
+
+
+def make_deflection_spec(op, prefs):
+    """Build a deflection spec dict from the operator's properties.
+
+    Modes:
+      legacy   — raw file-unit values (old lin_deflection/ang_deflection
+                 semantics); used when the legacy props were explicitly set
+                 (scripts, parity harness) so old callers are unaffected.
+      detail   — simple-mode integer detail level (resolved by caller).
+      physical — linear deflection is a physical length in meters, converted
+                 to file units per file once the unit scale is known.
+    """
+    legacy_set = (op.properties.is_property_set("lin_deflection")
+                  or op.properties.is_property_set("ang_deflection"))
+    if legacy_set:
+        return {"mode": "legacy", "lin": op.lin_deflection, "ang": op.ang_deflection}
+    # Artist-friendly mode: the dialog shows only the detail slider, so the
+    # detail gate must come before the relative/preset modes (neither is
+    # visible or editable in this mode). An explicitly passed quality_preset
+    # (scripts, the background worker) still wins.
+    preset_set = op.properties.is_property_set("quality_preset")
+    if prefs.simpler_parameters and not preset_set:
+        return {"mode": "detail", "detail": op.detail_level}
+    if op.quality_preset != "CUSTOM":
+        lin_m, ang = QUALITY_PRESETS[op.quality_preset]
+    else:
+        lin_m, ang = op.lin_deflection_len, op.ang_deflection_rot
+    if getattr(op, "tessellation_relative", False):
+        return {"mode": "relative", "lin": op.lin_deflection_rel, "ang": ang}
+    return {"mode": "physical", "lin_m": lin_m, "ang": ang}
+
+
+def resolve_deflections(spec, scale, calculate_detail_level):
+    """Resolve a deflection spec to (lin_def, ang_def) in FILE UNITS.
+
+    scale is meters-per-file-unit (known after the STEP header is read), so
+    physical mode yields the same real-world deflection regardless of the
+    file's unit system.
+    """
+    if spec is None:
+        return 0.8, 0.5
+    if spec["mode"] == "legacy":
+        return spec["lin"], spec["ang"]
+    if spec["mode"] == "detail":
+        a_def, l_def = calculate_detail_level(spec["detail"])
+        return l_def, a_def
+    if spec["mode"] == "relative":
+        return spec["lin"], spec["ang"]
+    # physical
+    lin_file_units = spec["lin_m"] / scale if scale > 0 else spec["lin_m"]
+    return lin_file_units, spec["ang"]
+
+
+def seed_from_prefs(op, prefs):
+    """Seed dialog defaults from addon preferences, once per session.
+
+    After the first invoke, the operator's own last-used values win (Blender
+    keeps them for the session); preferences win again after a restart.
+    """
+    if op.bl_idname in _session_seeded:
+        return
+    _session_seeded.add(op.bl_idname)
+    try:
+        op.up_as = prefs.preferred_up_axis
+        op.hierarchy_types = prefs.preferred_hierarchy
+        # Assigning quality_preset marks it "set" for the whole session,
+        # which would permanently override the artist-friendly detail
+        # slider (see make_deflection_spec) — skip seeding it in that mode.
+        if not prefs.simpler_parameters:
+            op.quality_preset = prefs.default_quality_preset
+    except (AttributeError, TypeError):
+        pass
+
+
+def draw_import_dialog(op, layout, prefs):
+    """Collapsible import dialog (Blender 4.1+ layout.panel API)."""
+    layout.use_property_split = True
+    layout.use_property_decorate = False
+
+    header, body = layout.panel("stepper_geometry", default_closed=False)
+    header.label(text="Geometry")
+    if body:
+        if prefs.simpler_parameters:
+            body.prop(op, "detail_level")
+        else:
+            # Relative tessellation replaces the quality preset, so the
+            # toggle lives here where its effect is visible.
+            body.prop(op, "tessellation_relative")
+            if op.tessellation_relative:
+                body.prop(op, "lin_deflection_rel")
+                body.prop(op, "ang_deflection_rot")
+            else:
+                body.prop(op, "quality_preset", text="Quality")
+                if op.quality_preset == "CUSTOM":
+                    body.prop(op, "lin_deflection_len")
+                    body.prop(op, "ang_deflection_rot")
+
+    header, body = layout.panel("stepper_scene", default_closed=False)
+    header.label(text="Scene")
+    if body:
+        body.prop(op, "up_as", text="Up Axis")
+        body.prop(op, "hierarchy_types", text="Hierarchy")
+        body.prop(op, "custom_scale")
+        sub = body.row()
+        sub.active = op.custom_scale
+        sub.prop(op, "user_scale")
+        body.prop(op, "apply_scale")
+
+    header, body = layout.panel("stepper_materials", default_closed=True)
+    header.label(text="Materials & UVs")
+    if body:
+        body.prop(op, "material_database", text="Material DB")
+        body.prop(op, "uv_surface")
+        body.prop(op, "uv_box")
+        sub = body.row()
+        sub.active = op.uv_box
+        sub.prop(op, "box_uv_scale")
+
+    header, body = layout.panel("stepper_advanced", default_closed=True)
+    header.label(text="Advanced")
+    if body:
+        body.prop(op, "skip_construction")
+        body.prop(op, "import_curves")
+
+
+class STEPPER_FH_step(bpy.types.FileHandler):
+    """Viewport drag & drop for STEP files (single or multiple)."""
+    bl_idname = "STEPPER_FH_step"
+    bl_label = "STEP import (STEPper NEXT)"
+    bl_import_operator = "import_scene.occ_import_step"
+    bl_file_extensions = ";".join(STEP_EXTENSIONS)
+
+    @classmethod
+    def poll_drop(cls, context):
+        return context.area is not None and context.area.type == "VIEW_3D"
+
+
+class STEPPER_OT_batch_import_folder(bpy.types.Operator):
+    """Import every STEP/IGES/BREP file in a folder, each into its own
+    collection, using the quality/scene defaults from the addon preferences"""
+    bl_idname = "stepper.batch_import_folder"
+    bl_label = "Batch Import Folder"
+    bl_options = {"REGISTER", "UNDO"}
+
+    directory: bpy.props.StringProperty(subtype="DIR_PATH")
+    filter_glob: bpy.props.StringProperty(
+        default="*.step;*.stp;*.st;*.iges;*.igs;*.brep;*.brp", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        try:
+            # os.listdir instead of glob: folder names with glob
+            # metacharacters ("Parts [rev2]") must not be treated as patterns
+            names = os.listdir(self.directory)
+        except OSError as e:
+            self.report({"ERROR"}, f"Cannot read folder: {e}")
+            return {"CANCELLED"}
+        files = sorted(
+            os.path.join(self.directory, n) for n in names
+            if n.lower().endswith(STEP_EXTENSIONS))
+        if not files:
+            self.report({"WARNING"}, "No STEP files found in the folder")
+            return {"CANCELLED"}
+
+        from . import main as _main
+
+        # Honor the user's preference defaults (quality, up axis, hierarchy)
+        # rather than the raw file-unit fallback deflections.
+        prefs = _main._get_addon_prefs()
+        if prefs.simpler_parameters:
+            spec = {"mode": "detail",
+                    "detail": context.scene.stepper.detail_level}
+        else:
+            lin_m, ang = QUALITY_PRESETS[prefs.default_quality_preset]
+            spec = {"mode": "physical", "lin_m": lin_m, "ang": ang}
+
+        scene_col = context.scene.collection
+        wm = context.window_manager
+        wm.progress_begin(0, len(files))
+        n_ok = 0
+        try:
+            for i, path in enumerate(files):
+                wm.progress_update(i)
+                pre_children = set(scene_col.children)
+                pre_objects = set(scene_col.objects)
+
+                result = _main.load_step(
+                    context, path,
+                    deflection_spec=spec,
+                    up_as=prefs.preferred_up_axis,
+                    htypes=prefs.preferred_hierarchy,
+                )
+                if result is False:
+                    self.report({"WARNING"},
+                                f"Could not import {os.path.basename(path)}")
+                    continue
+                n_ok += 1
+
+                # Wrap everything the import linked at scene level into a
+                # per-file collection.
+                file_col = bpy.data.collections.new(
+                    os.path.splitext(os.path.basename(path))[0])
+                scene_col.children.link(file_col)
+                for col in [c for c in scene_col.children
+                            if c not in pre_children and c != file_col]:
+                    scene_col.children.unlink(col)
+                    file_col.children.link(col)
+                for obj in [o for o in scene_col.objects
+                            if o not in pre_objects]:
+                    scene_col.objects.unlink(obj)
+                    file_col.objects.link(obj)
+        finally:
+            wm.progress_end()
+        self.report({"INFO"}, f"Imported {n_ok}/{len(files)} STEP files")
+        return {"FINISHED"}
+
+
+# Blender classes contributed by this module (concatenated in main.register)
+classes = (STEPPER_FH_step, STEPPER_OT_batch_import_folder)

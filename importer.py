@@ -50,6 +50,8 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
 from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.IMeshTools import IMeshTools_Parameters
+from OCP.Precision import Precision
 from OCP.BRepTools import BRepTools
 from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.ShapeFix import ShapeFix_Shape
@@ -102,7 +104,10 @@ from OCP.StepShape import (
 
 from OCP.OCP import __version__ as OCP_VERSION
 
-from ocp_utils import ShapeKey, get_label_name
+try:
+    from .ocp_utils import ShapeKey, get_label_name
+except ImportError:  # standalone use outside the package (test harnesses)
+    from ocp_utils import ShapeKey, get_label_name
 
 print("--> STEPper NEXT OpenCASCADE (OCP) version:", OCP_VERSION)
 
@@ -118,13 +123,34 @@ try:
     # The OCP-era native module exposes mesh_and_extract (BinTools serialize
     # handoff).  An old pythonocc-era binary lacks it and cannot be used.
     _HAS_NATIVE = hasattr(stepper_native, "mesh_and_extract")
+    _NATIVE_ABI = getattr(stepper_native, "ABI_VERSION", 1)
     if _HAS_NATIVE:
         print("--> STEPper NEXT native acceleration: ENABLED")
     else:
         print("--> STEPper NEXT native acceleration: incompatible binary (using Python fallback)")
 except ImportError:
     _HAS_NATIVE = False
+    _NATIVE_ABI = 0
     print("--> STEPper NEXT native acceleration: not available (using Python fallback)")
+
+
+def _mesh_shape(shp, lin_def, ang_def, relative=False):
+    """Run BRepMesh on a shape.
+
+    relative=True switches OCCT to relative deflection (deflection scales
+    with each edge's size) and enables parallel meshing; the absolute path
+    keeps the historical single-threaded call for deterministic parity.
+    """
+    if relative:
+        p = IMeshTools_Parameters()
+        p.Deflection = lin_def
+        p.Angle = ang_def
+        p.Relative = True
+        p.InParallel = True
+        p.MinSize = Precision.Confusion_s()
+        BRepMesh_IncrementalMesh(shp, p)
+    else:
+        BRepMesh_IncrementalMesh(shp, lin_def, False, ang_def, False).Perform()
 
 
 def _limit_openmp_threads(n):
@@ -170,7 +196,7 @@ class NativeMeshData:
     Compatible with the from_pydata + foreach_set Blender creation path.
     """
     __slots__ = ('verts', 'faces', 'norms', 'uvs',
-                 'loop_norms',
+                 'loop_norms', 'loop_uvs',
                  'tri_colors', 'tri_batches', 'tri_mat_names', 'matrix')
 
     def __init__(self, verts, faces, norms, uvs,
@@ -180,6 +206,7 @@ class NativeMeshData:
         self.norms = norms              # (V, 3) float32 per-vertex
         self.uvs = uvs                  # (V, 2) float32 per-vertex
         self.loop_norms = None          # (T*3, 3) float32 per-corner, set before fuse_verts
+        self.loop_uvs = None            # (T*3, 2) float32 per-corner, set before fuse_verts
         self.tri_colors = tri_colors    # (T, 3) float32, -1 = no color
         self.tri_batches = tri_batches  # (T,) int32
         self.tri_mat_names = tri_mat_names  # list[str|None] len=T
@@ -197,6 +224,9 @@ class NativeMeshData:
         # Before fusing, each OCC face has its own vertex range, so
         # norms[faces.ravel()] gives correct per-face-corner normals.
         self.loop_norms = self.norms[self.faces.ravel()].reshape(-1, 3).copy()
+        # Same snapshot for per-corner UVs: shared vertex positions can carry
+        # different UVs per OCC face, so they must be captured pre-fuse too.
+        self.loop_uvs = self.uvs[self.faces.ravel()].reshape(-1, 2).copy()
 
         # Round to avoid floating-point near-misses
         verts_rounded = np.round(self.verts, decimals=6)
@@ -208,6 +238,10 @@ class NativeMeshData:
         self.faces = inverse[self.faces]
         self.verts = self.verts[first_idx]
         self.uvs = self.uvs[first_idx]
+        # Keep per-vertex normals aligned with the fused vertex array (the
+        # loop_norms snapshot above is what shading actually uses, but a
+        # stale-length norms array would silently corrupt any fallback path)
+        self.norms = self.norms[first_idx]
 
     def filter_zero_area(self):
         """Remove triangles where two or more vertices coincide."""
@@ -229,6 +263,8 @@ class NativeMeshData:
             # keep mask is per-tri; loop_norms is per-corner (3 per tri)
             keep3 = np.repeat(keep, 3)
             self.loop_norms = self.loop_norms[keep3]
+            if self.loop_uvs is not None:
+                self.loop_uvs = self.loop_uvs[keep3]
 
     def filter_same_face(self):
         """Remove duplicate triangles (same vertex set)."""
@@ -245,6 +281,8 @@ class NativeMeshData:
             # unique_idx is per-tri; expand to per-corner
             loop_idx = np.repeat(unique_idx * 3, 3) + np.tile([0, 1, 2], len(unique_idx))
             self.loop_norms = self.loop_norms[loop_idx]
+            if self.loop_uvs is not None:
+                self.loop_uvs = self.loop_uvs[loop_idx]
 
     def fill_empty_color(self):
         """Replace -1 sentinel colors with pink."""
@@ -265,6 +303,12 @@ class NativeMeshData:
         if self.loop_norms is not None:
             return self.loop_norms
         return self.norms[self.faces.ravel()]
+
+    def get_loop_uvs(self):
+        """Return per-loop (per-face-corner) UVs (see get_loop_norms)."""
+        if self.loop_uvs is not None:
+            return self.loop_uvs
+        return self.uvs[self.faces.ravel()]
 
     def get_loop_mat_names(self):
         """Expand per-face mat names to per-loop."""
@@ -390,6 +434,7 @@ class ShapeTreeNode:
     local_transform: np.ndarray = field(default_factory=np.eye(4, dtype=np.float32))
     global_transform: np.ndarray = field(default_factory=np.eye(4, dtype=np.float32))
     shape: TopoDS_Shape = None
+    color_override: tuple = None  # (r, g, b) instance color from component label
 
     def __init__(self, parent, index, tag, name):
         self.parent = parent
@@ -400,6 +445,7 @@ class ShapeTreeNode:
         self.local_transform = np.eye(4, dtype=np.float32)
         self.global_transform = np.eye(4, dtype=np.float32)
         self.shape = None
+        self.color_override = None
 
     def get_values(self):
         """
@@ -459,8 +505,20 @@ class ShapeTree:
 
 
 class ReadSTEP:
-    def __init__(self, filename):
+    def __init__(self, filename, skip_name_prefixes=()):
+        # Construction-geometry filter: case-insensitive node-name prefixes
+        # to skip during the assembly walk (e.g. "Sketches", "Axes").
+        self.skip_name_prefixes = tuple(
+            p.strip().lower() for p in skip_name_prefixes if p.strip())
+        self._filter_key = frozenset(self.skip_name_prefixes)
+        self.filtered_labels = []  # [(label, name)] of skipped subtrees
         self.read_file(filename)
+
+    def _is_filtered(self, name):
+        if not self.skip_name_prefixes:
+            return False
+        lname = name.lower()
+        return any(lname.startswith(p) for p in self.skip_name_prefixes)
 
     def query_color(self, label, overwrite=False):
         # default color = pink
@@ -468,12 +526,26 @@ class ReadSTEP:
         colorset = False
         colortype = None
 
-        c_gen = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorGen, c)
-        c_surf = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorSurf, c)
-        c_curv = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorCurv, c)
+        # Query each color type into its own object: GetColor_s mutates the
+        # passed color, so sharing one would make the last successful query
+        # win (a label with both surface and curve colors imported with the
+        # CURVE color applied to its faces).
+        cg = Quantity_Color(1.0, 0.0, 1.0, Quantity_TOC_RGB)
+        cs = Quantity_Color(1.0, 0.0, 1.0, Quantity_TOC_RGB)
+        cc = Quantity_Color(1.0, 0.0, 1.0, Quantity_TOC_RGB)
+        c_gen = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorGen, cg)
+        c_surf = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorSurf, cs)
+        c_curv = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorCurv, cc)
         if c_gen or c_surf or c_curv:
             colorset = True
-            colortype = c_gen * 1 + c_surf * 2 + c_curv * 3
+            # Meshes want the surface color first, then the generic color;
+            # the curve color only when nothing else is defined.
+            if c_surf:
+                c, colortype = cs, 2
+            elif c_gen:
+                c, colortype = cg, 1
+            else:
+                c, colortype = cc, 3
 
         return c, colortype, colorset
 
@@ -560,10 +632,13 @@ class ReadSTEP:
 
         print("STEP read into memory")
 
-        # Check the STEP data model for unresolved references
+        # Check the STEP data model for unresolved references.
+        # ChangeReader() stays outside the try: the units query below needs
+        # basic_reader, so a swallowed failure here must not turn into a
+        # NameError there.
+        basic_reader = step_reader.ChangeReader()
         has_data_failures = False
         try:
-            basic_reader = step_reader.ChangeReader()
             step_model = basic_reader.StepModel()
             if step_model is not None:
                 global_check = step_model.GlobalCheck(True)
@@ -749,11 +824,23 @@ class ReadSTEP:
                         label_reference = TDF_Label()
                         XCAFDoc_ShapeTool.GetReferredShape_s(label, label_reference)
 
+                        ref_name = get_label_name(label_reference) or get_label_name(label)
+                        if self._is_filtered(ref_name):
+                            self.filtered_labels.append((label_reference, ref_name))
+                            continue
+
                         label_transform = self.label_matrix(label)
                         node = tree.add(master_leaf.index, label_reference)
                         new_leaf = tree.nodes[node.index]
                         new_leaf.local_transform = label_transform
                         new_leaf.global_transform = master_leaf.global_transform @ label_transform
+
+                        # Instance color override: a color attached to the
+                        # component reference label applies to this occurrence
+                        # (unless faces/sub-shapes carry their own colors).
+                        oc, _, o_ok = self.query_color(label)
+                        if o_ok:
+                            new_leaf.color_override = (oc.Red(), oc.Green(), oc.Blue())
 
                         _get_sub_shapes(label_reference, level + 1, tree, node.index)
                     else:
@@ -824,8 +911,7 @@ class ReadSTEP:
                 BRepTools.Clean_s(shp)
                 ex = TopExp_Explorer(shp, TopAbs_FACE)
                 if ex.More():
-                    brepmesh = BRepMesh_IncrementalMesh(shp, lin_def, False, ang_def, False)
-                    brepmesh.Perform()
+                    _mesh_shape(shp, lin_def, ang_def)
 
         n_workers = min(len(shapes), os.cpu_count() or 4)
 
@@ -910,6 +996,13 @@ class ReadSTEP:
                 undef_normals = True
             norms[t - 1] = nn
 
+        # Normalize UVs to a 0-1 box, preserving aspect ratio (matches the
+        # native path's per-face normalization)
+        if has_uvs:
+            span = max(Umax - Umin, Vmax - Vmin)
+            s = 1.0 / span if span > 1e-12 else 1.0
+            uvs = [((u - Umin) * s, (v - Vmin) * s) for (u, v) in uvs]
+
         # Read all triangles
         tris = [None] * d_nbtriangles
         for t in range(1, d_nbtriangles + 1):
@@ -924,6 +1017,12 @@ class ReadSTEP:
 
         tri_data = []
         for t in tris:
+            # Degenerate triangles (repeated node index — collapsed seams,
+            # corrupt geometry) would fail TriData's assertions and discard
+            # the whole face; skip just the bad triangle instead, matching
+            # the native path (which drops them in filter_zero_area).
+            if t[0] == t[1] or t[1] == t[2] or t[2] == t[0]:
+                continue
             tri_data.append(trimesh.TriData(
                 t, [norms[i] for i in t], [uvs[i] for i in t],
                 None, None, None, None))
@@ -952,6 +1051,8 @@ class ReadSTEP:
             return  # already built
 
         self._recovery_compounds = {}
+        if getattr(self, "_xcaf_reader", None) is None:
+            return  # STEP-only feature (IGES/BREP readers have no STEP model)
         try:
             basic_reader = self._xcaf_reader.ChangeReader()
             tr = basic_reader.WS().TransferReader()
@@ -1193,49 +1294,49 @@ class ReadSTEP:
         return shp
 
     def _tessellate_shape(self, shp, lin_def, ang_def, part_name="",
-                          skip_faulty=False):
+                          skip_faulty=False, relative=False):
         """Tessellate a shape, retrying with relaxed tolerances and shape
         healing if the first attempt produces no triangulation.
 
         When skip_faulty is True, skip all healing/recovery retries — just
         tessellate once and return whatever we get.
         """
+        def _has_triangulation(s):
+            loc = TopLoc_Location()
+            ex = TopExp_Explorer(s, TopAbs_FACE)
+            while ex.More():
+                face = TopoDS.Face_s(ex.Current())
+                if BRep_Tool.Triangulation_s(face, loc) is not None:
+                    return True
+                ex.Next()
+            return False
+
         BRepTools.Clean_s(shp)
-        brepmesh = BRepMesh_IncrementalMesh(shp, lin_def, False, ang_def, False)
-        brepmesh.Perform()
+        _mesh_shape(shp, lin_def, ang_def, relative)
 
-        # Check if tessellation produced any triangles
-        test_loc = TopLoc_Location()
-        ex = TopExp_Explorer(shp, TopAbs_FACE)
-        has_tris = False
-        while ex.More():
-            face = TopoDS.Face_s(ex.Current())
-            if BRep_Tool.Triangulation_s(face, test_loc) is not None:
-                has_tris = True
-                break
-            ex.Next()
-
-        if has_tris or skip_faulty:
+        if _has_triangulation(shp) or skip_faulty:
             return shp
 
         # Retry 1: heal shape then tessellate
         healed = self._heal_shape(shp)
         if healed is not shp:
             BRepTools.Clean_s(healed)
-            brepmesh = BRepMesh_IncrementalMesh(healed, lin_def, False, ang_def, False)
-            brepmesh.Perform()
-            print(f"\n  [healed] {part_name}", end="", flush=True)
-            return healed
+            _mesh_shape(healed, lin_def, ang_def, relative)
+            if _has_triangulation(healed):
+                print(f"\n  [healed] {part_name}", end="", flush=True)
+                return healed
+            # Healing changed the shape but it still won't mesh — give the
+            # relaxed-tolerance retry a chance on the healed geometry.
+            shp = healed
 
         # Retry 2: relax tolerances significantly
         BRepTools.Clean_s(shp)
-        brepmesh = BRepMesh_IncrementalMesh(shp, lin_def * 4.0, False, ang_def * 2.0, False)
-        brepmesh.Perform()
+        _mesh_shape(shp, lin_def * 4.0, ang_def * 2.0, relative)
         print(f"\n  [relaxed-tess] {part_name}", end="", flush=True)
         return shp
 
     def build_trimesh(self, shape, lin_def=0.8, ang_def=0.5, hacks=set([]),
-                      part_name=""):
+                      part_name="", fallback_color=None, relative=False):
         out_mesh = trimesh.TriMesh()
         out_mesh.matrix = np.eye(4, dtype=np.float32)
 
@@ -1290,6 +1391,12 @@ class ReadSTEP:
             if col is not None:
                 col_rgb = b_RGB(col)
                 col_name = b_colorname(col)
+            elif fallback_color is not None:
+                # Instance color override from the component reference label —
+                # applies where no face/sub-shape color is present.
+                col_rgb = fallback_color
+                col_name = Quantity_Color.StringName_s(
+                    Quantity_Color.Name_s(*fallback_color))
             else:
                 col_rgb = None
                 col_name = ""
@@ -1309,7 +1416,8 @@ class ReadSTEP:
             if not self._pre_tessellated:
                 shp = self._tessellate_shape(
                     shp, lin_def, ang_def,
-                    part_name=_part_name, skip_faulty=skip_faulty)
+                    part_name=_part_name, skip_faulty=skip_faulty,
+                    relative=relative)
                 ex = TopExp_Explorer(shp, TopAbs_FACE)
             else:
                 test_loc = TopLoc_Location()
@@ -1317,7 +1425,8 @@ class ReadSTEP:
                 if BRep_Tool.Triangulation_s(test_face, test_loc) is None:
                     shp = self._tessellate_shape(
                         shp, lin_def, ang_def,
-                        part_name=_part_name, skip_faulty=skip_faulty)
+                        part_name=_part_name, skip_faulty=skip_faulty,
+                        relative=relative)
                     ex = TopExp_Explorer(shp, TopAbs_FACE)
                     print(f"\n  [re-tess] {_part_name}", end="", flush=True)
             trf = shp.Location().Transformation()
@@ -1337,7 +1446,8 @@ class ReadSTEP:
         # ── Phase 2: Extract triangulations ───────────────────────────
         if _HAS_NATIVE:
             result = self._build_trimesh_native(
-                collected_faces, face_dedup, out_mesh, lin_def, ang_def)
+                collected_faces, face_dedup, out_mesh, lin_def, ang_def,
+                relative)
         else:
             result = self._build_trimesh_python(
                 collected_faces, face_dedup, out_mesh)
@@ -1345,7 +1455,7 @@ class ReadSTEP:
         return result
 
     def _build_trimesh_native(self, collected_faces, face_dedup, out_mesh,
-                              lin_def=0.8, ang_def=0.5):
+                              lin_def=0.8, ang_def=0.5, relative=False):
         """Use native C++ module to extract all face triangulations at once.
 
         The deduped faces are packed into a compound and handed to the C++
@@ -1388,8 +1498,12 @@ class ReadSTEP:
         BinTools.Write_s(compound, buf, True, False,
                          BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
         try:
-            result = stepper_native.mesh_and_extract(
-                buf.getvalue(), lin_def, ang_def)
+            if _NATIVE_ABI >= 2:
+                result = stepper_native.mesh_and_extract(
+                    buf.getvalue(), lin_def, ang_def, relative)
+            else:
+                result = stepper_native.mesh_and_extract(
+                    buf.getvalue(), lin_def, ang_def)
         except Exception as e:
             print(f"\n  [native extraction failed ({e}); Python fallback]",
                   end="", flush=True)
@@ -1478,6 +1592,16 @@ class ReadSTEP:
             if reversed_face:
                 norms_out = -norms_out
             all_norms[vs:vs + vc] = norms_out
+
+            # Normalize this face's UVs to a 0-1 box, preserving aspect ratio
+            # (raw OCC parameter space has arbitrary per-face scaling).  Done
+            # after the raw values were used for SetParameters above.
+            u_min = float(u_vals.min())
+            v_min = float(v_vals.min())
+            span = max(float(u_vals.max()) - u_min, float(v_vals.max()) - v_min)
+            s = 1.0 / span if span > 1e-12 else 1.0
+            all_uvs[vs:vs + vc, 0] = (u_vals - u_min) * s
+            all_uvs[vs:vs + vc, 1] = (v_vals - v_min) * s
 
         valid_indices = [j for j in range(len(face_refs))
                          if not failed_mask[j]]

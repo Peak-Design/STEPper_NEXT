@@ -39,4 +39,6 @@ class ShapeKey:
         return self._h
 
     def __eq__(self, other):
+        if not isinstance(other, ShapeKey):
+            return NotImplemented
         return self.shape.IsEqual(other.shape)

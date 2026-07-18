@@ -125,8 +125,10 @@ class TriMesh:
         new_verts = []
         new_index = 0
         for vi, v in enumerate(self.verts):
-            # Find duplicate verts based on location "hash"
-            v_hash = tuple(v)
+            # Find duplicate verts based on location "hash", rounded to the
+            # same 6 decimals as the native path (NativeMeshData.fuse_verts)
+            # so both paths merge the same near-miss boundary vertices.
+            v_hash = tuple(round(c, 6) for c in v)
             if v_hash not in verts:
                 new_verts.append(v)
                 verts[v_hash] = new_index

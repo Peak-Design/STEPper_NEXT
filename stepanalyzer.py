@@ -33,7 +33,10 @@ from OCP.TDocStd import TDocStd_Document
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
 
-from ocp_utils import get_label_name, label_entry
+try:
+    from .ocp_utils import get_label_name, label_entry
+except ImportError:  # standalone use outside the package
+    from ocp_utils import get_label_name, label_entry
 
 
 class StepAnalyzer:
@@ -68,8 +71,8 @@ class StepAnalyzer:
             step_reader.Transfer(doc)
             print("Transferred")
         else:
-            print("Transfer failed")
-            exit(1)
+            # raise, never exit(): this runs inside Blender's UI process
+            raise RuntimeError(f"STEP transfer failed for {fname}")
 
         self.shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
 
@@ -96,6 +99,10 @@ class StepAnalyzer:
         print(f"Empty: {labels.IsEmpty()}")
         nbr = labels.Length()
         print("Analyzer roots:", nbr)
+
+        if nbr == 0:
+            self.output += "No free shapes in document\n"
+            return self.output
 
         rootlabel = labels.Value(1)  # First label at root
 
