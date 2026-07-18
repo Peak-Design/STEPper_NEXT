@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. v2.2.0). Leave empty for test build.'
+        description: 'Version tag (e.g. v2.3.0). Leave empty for test build.'
         required: false
         default: ''
 
@@ -16,13 +16,15 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OCP_VERSION: 7.9.3.1.1
+  OCCT_VERSION: 7.9.3
 
 permissions:
   contents: write   # needed to create releases
 
 jobs:
   # ════════════════════════════════════════════════════════════════════
-  # Windows build
+  # Windows (windows-x64)
   # ════════════════════════════════════════════════════════════════════
   build-windows:
     runs-on: windows-latest
@@ -43,9 +45,9 @@ jobs:
           conda-remove-defaults: true
           python-version: '3.13'
 
-      - name: Install pythonocc-core and build tools
+      - name: Install OCCT and build tools
         run: |
-          conda install -y -c conda-forge pythonocc-core=7.9.3 numpy cmake
+          conda install -y -c conda-forge occt=${OCCT_VERSION}=novtk* numpy cmake
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -65,73 +67,50 @@ jobs:
             -DOCCT_ROOT="$(cygpath -w "$CONDA_PREFIX/Library")"
           cmake --build . --config Release
 
-      - name: Assemble addon
+      - name: Assemble extension
         run: |
           ADDON_DIR="STEPper_NEXT"
-          mkdir -p "$ADDON_DIR/OCC/Core"
-          mkdir -p "$ADDON_DIR/OCC/Wrapper"
-          mkdir -p "$ADDON_DIR/OCC/Display"
-          mkdir -p "$ADDON_DIR/OCC/Extend"
+          mkdir -p "$ADDON_DIR/wheels" "$ADDON_DIR/native_libs"
 
-          # Copy addon Python files
-          for f in __init__.py main.py importer.py trimesh.py nurbs.py six.py stepanalyzer.py; do
-            [ -f "$f" ] && cp "$f" "$ADDON_DIR/"
+          for f in __init__.py main.py importer.py trimesh.py nurbs.py ocp_utils.py stepanalyzer.py LICENSE README.md; do
+            cp "$f" "$ADDON_DIR/"
           done
-          cp LICENSE "$ADDON_DIR/"
-          cp README.md "$ADDON_DIR/"
-
-          # Copy OCC Python wrappers and stubs
-          cp OCC/__init__.py "$ADDON_DIR/OCC/"
-          cp OCC/LICENSE "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/AUTHORS "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/Wrapper/*.py "$ADDON_DIR/OCC/Wrapper/" 2>/dev/null || true
-
-          # Copy OCC Core .py and .pyi files from repo (SWIG wrappers)
-          cp OCC/Core/*.py "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          cp OCC/Core/*.pyi "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCC Core binary modules from conda
-          CONDA_SP="$CONDA_PREFIX/Lib/site-packages"
-          cp "$CONDA_SP"/OCC/Core/*.pyd "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCCT DLLs from conda
-          cp "$CONDA_PREFIX"/Library/bin/TK*.dll "$ADDON_DIR/OCC/Core/"
-          # Third-party DLLs
-          for dll in tbb12.dll tbbmalloc.dll freetype.dll zlib.dll libxml2.dll; do
-            [ -f "$CONDA_PREFIX/Library/bin/$dll" ] && cp "$CONDA_PREFIX/Library/bin/$dll" "$ADDON_DIR/OCC/Core/"
-          done
-          # Also grab any remaining DLL dependencies from conda lib
-          for dll in "$CONDA_PREFIX"/Library/bin/*.dll; do
-            base=$(basename "$dll")
-            # Skip large unrelated DLLs
-            case "$base" in
-              Qt*|qt*|tcl*|tk*|sqlite*) continue ;;
-            esac
-            [ ! -f "$ADDON_DIR/OCC/Core/$base" ] && cp "$dll" "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          done
-
-          # Copy built stepper_native
-          find native/build -name "stepper_native*.pyd" -exec cp {} "$ADDON_DIR/" \;
-
-          # Copy docs folder if present
           [ -d "docs" ] && cp -r docs "$ADDON_DIR/docs"
+
+          WHEEL="cadquery_ocp_novtk-${OCP_VERSION}-cp313-cp313-win_amd64.whl"
+          cp "wheels/$WHEEL" "$ADDON_DIR/wheels/"
+          python ci/make_platform_manifest.py blender_manifest.toml windows-x64 "$WHEEL" "$ADDON_DIR/blender_manifest.toml"
+
+          # Native module + its private plain-named OCCT subset (the wheel's
+          # DLLs are name-mangled; only bytes cross the module boundary)
+          cp native/build/stepper_native.pyd "$ADDON_DIR/stepper_native.cp313-win_amd64.pyd"
+          for dll in TKernel TKMath TKBRep TKG2d TKG3d TKGeomBase TKGeomAlgo TKTopAlgo TKShHealing TKMesh; do
+            cp "$CONDA_PREFIX/Library/bin/$dll.dll" "$ADDON_DIR/native_libs/"
+          done
+
+      - name: Smoke test
+        run: |
+          # Make OCP importable for the test by extracting the bundled wheel
+          # (Blender does this via the manifest at install time)
+          cd STEPper_NEXT && 7z x -y wheels/*.whl -otest_site >/dev/null && cd ..
+          PYTHONPATH="$PWD/STEPper_NEXT/test_site" python ci/smoke_test.py STEPper_NEXT
+          rm -rf STEPper_NEXT/test_site
 
       - name: Create zip
         run: |
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION:-dev}"
-          7z a "STEPper_NEXT-${VERSION}-windows.zip" STEPper_NEXT/
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('blender_manifest.toml','rb'))['version'])")
+          cd STEPper_NEXT && 7z a "../stepper_next-${VERSION}-windows_x64.zip" . && cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: STEPper_NEXT-*-windows.zip
+          path: stepper_next-*-windows_x64.zip
 
   # ════════════════════════════════════════════════════════════════════
-  # macOS ARM64 (Apple Silicon) build
+  # macOS (macos-arm64 native build + macos-x64 cross-compile)
   # ════════════════════════════════════════════════════════════════════
-  build-macos-arm64:
+  build-macos:
     runs-on: macos-14
     defaults:
       run:
@@ -150,130 +129,128 @@ jobs:
           conda-remove-defaults: true
           python-version: '3.13'
 
-      - name: Install pythonocc-core and build tools
+      - name: Install OCCT and build tools (arm64 + x64 SDKs)
         run: |
-          conda install -y -c conda-forge pythonocc-core=7.9.3 numpy cmake ninja
+          conda install -y -c conda-forge occt=${OCCT_VERSION}=novtk* numpy cmake ninja
+          # x64 OCCT for cross-compiling (files only; never executed here)
+          CONDA_SUBDIR=osx-64 conda create -y -p "$PWD/occt-x64" -c conda-forge occt=${OCCT_VERSION}=novtk*
 
-      - name: Build stepper_native
+      - name: Build stepper_native (arm64)
         run: |
           cd native
-          mkdir build && cd build
+          mkdir build-arm64 && cd build-arm64
           cmake .. \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
           cmake --build . --config Release
 
-      - name: Assemble addon
+      - name: Build stepper_native (x64 cross)
         run: |
-          ADDON_DIR="STEPper_NEXT"
-          mkdir -p "$ADDON_DIR/OCC/Core"
-          mkdir -p "$ADDON_DIR/OCC/Wrapper"
-          mkdir -p "$ADDON_DIR/OCC/Display"
-          mkdir -p "$ADDON_DIR/OCC/Extend"
+          cd native
+          mkdir build-x64 && cd build-x64
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3" \
+            -DOCCT_ROOT="$GITHUB_WORKSPACE/occt-x64"
+          cmake --build . --config Release
+          lipo -archs stepper_native.so | grep -q x86_64
 
-          # Copy addon Python files
-          for f in __init__.py main.py importer.py trimesh.py nurbs.py six.py stepanalyzer.py; do
-            [ -f "$f" ] && cp "$f" "$ADDON_DIR/"
-          done
-          cp LICENSE "$ADDON_DIR/"
-          cp README.md "$ADDON_DIR/"
+      - name: Assemble extensions (both mac platforms)
+        run: |
+          assemble() {
+            local plat="$1" wheel_tag="$2" build_dir="$3" occt_prefix="$4"
+            local dir="STEPper_NEXT-$plat"
+            mkdir -p "$dir/wheels" "$dir/native_libs"
 
-          # Copy OCC Python wrappers and stubs
-          cp OCC/__init__.py "$ADDON_DIR/OCC/"
-          cp OCC/LICENSE "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/AUTHORS "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/Wrapper/*.py "$ADDON_DIR/OCC/Wrapper/" 2>/dev/null || true
-
-          # Copy OCC Core .py and .pyi files from repo
-          cp OCC/Core/*.py "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          cp OCC/Core/*.pyi "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCC Core binary modules from conda (.so files)
-          CONDA_SP="$CONDA_PREFIX/lib/python3.13/site-packages"
-          cp "$CONDA_SP"/OCC/Core/*.so "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCCT dylibs from conda (including versioned files like libTKBRep.7.9.dylib)
-          for f in "$CONDA_PREFIX"/lib/libTK*dylib*; do
-            [ -e "$f" ] && cp -P "$f" "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          done
-          # Third-party dylibs (copy all versions + symlinks)
-          for pattern in libtbb libtbbmalloc libfreetype libz libxml2 libicuuc libicui18n libicudata liblzma; do
-            for f in "$CONDA_PREFIX"/lib/${pattern}*dylib*; do
-              [ -e "$f" ] && cp -P "$f" "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
+            for f in __init__.py main.py importer.py trimesh.py nurbs.py ocp_utils.py stepanalyzer.py LICENSE README.md; do
+              cp "$f" "$dir/"
             done
-          done
-          # Resolve any dangling symlinks by also copying targets
-          for link in "$ADDON_DIR/OCC/Core"/*.dylib; do
-            [ -L "$link" ] || continue
-            target=$(readlink "$link")
-            if [ ! -e "$ADDON_DIR/OCC/Core/$target" ] && [ -e "$CONDA_PREFIX/lib/$target" ]; then
-              cp "$CONDA_PREFIX/lib/$target" "$ADDON_DIR/OCC/Core/"
-            fi
-          done
+            [ -d "docs" ] && cp -r docs "$dir/docs"
 
-          # Copy built stepper_native
-          find native/build -name "stepper_native*.so" -exec cp {} "$ADDON_DIR/" \;
+            local wheel="cadquery_ocp_novtk-${OCP_VERSION}-cp313-cp313-${wheel_tag}.whl"
+            cp "wheels/$wheel" "$dir/wheels/"
+            python ci/make_platform_manifest.py blender_manifest.toml "$plat" "$wheel" "$dir/blender_manifest.toml"
 
-          # Copy docs folder if present
-          [ -d "docs" ] && cp -r docs "$ADDON_DIR/docs"
+            cp "native/$build_dir/stepper_native.so" "$dir/"
+            for tk in TKernel TKMath TKBRep TKG2d TKG3d TKGeomBase TKGeomAlgo TKTopAlgo TKShHealing TKMesh; do
+              for f in "$occt_prefix"/lib/lib${tk}.*dylib*; do
+                [ -e "$f" ] && cp -P "$f" "$dir/native_libs/" || true
+              done
+            done
+            # Pull in extra conda deps of the TK subset (tbb etc.)
+            for lib in "$dir/native_libs"/*.dylib*; do
+              [ -f "$lib" ] || continue
+              otool -L "$lib" | awk '{print $1}' | while read dep; do
+                case "$dep" in
+                  */lib/*|@rpath/*)
+                    base=$(basename "$dep")
+                    if [ ! -e "$dir/native_libs/$base" ] && [ -e "$occt_prefix/lib/$base" ]; then
+                      cp "$occt_prefix/lib/$base" "$dir/native_libs/"
+                    fi
+                    ;;
+                esac
+              done
+            done
+          }
+          assemble macos-arm64 macosx_11_0_arm64 build-arm64 "$CONDA_PREFIX"
+          assemble macos-x64 macosx_11_0_x86_64 build-x64 "$GITHUB_WORKSPACE/occt-x64"
 
-      - name: Fix dylib paths
+      - name: Fix dylib paths and sign (native module only)
         run: |
-          set +e  # don't exit on grep/otool returning non-zero
-          CORE_DIR="STEPper_NEXT/OCC/Core"
-
+          set +e
           fix_deps() {
-            local target="$1"
-            local rpath_prefix="$2"
-            # Patch both absolute conda paths AND @rpath/ references
+            local target="$1" rpath_prefix="$2"
             otool -L "$target" 2>/dev/null | awk '{print $1}' | while read dep; do
               case "$dep" in
-                "$CONDA_PREFIX"*|@rpath/*)
+                */conda*|*/occt-x64/*|@rpath/*)
                   dep_basename=$(basename "$dep")
                   install_name_tool -change "$dep" "${rpath_prefix}${dep_basename}" "$target" 2>/dev/null || true
                   ;;
               esac
             done
           }
+          fix_tree() {
+            local dir="$1"
+            find "$dir/native_libs" -name "*dylib*" -type f | while IFS= read -r lib; do
+              fix_deps "$lib" "@loader_path/"
+              install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" 2>/dev/null || true
+              codesign --force --sign - "$lib" 2>/dev/null || true
+            done
+            fix_deps "$dir/stepper_native.so" "@loader_path/native_libs/"
+            codesign --force --sign - "$dir/stepper_native.so" 2>/dev/null || true
+          }
+          fix_tree STEPper_NEXT-macos-arm64
+          fix_tree STEPper_NEXT-macos-x64
 
-          # Fix all dylibs to use @loader_path for dependencies (including versioned like .7.9.dylib)
-          find "$CORE_DIR" -name "*dylib*" -type f | while IFS= read -r lib; do
-            fix_deps "$lib" "@loader_path/"
-            lib_basename=$(basename "$lib")
-            install_name_tool -id "@loader_path/$lib_basename" "$lib" 2>/dev/null || true
-          done
-
-          # Fix .so modules (Python extensions)
-          find "$CORE_DIR" -name "*.so" -type f | while IFS= read -r so; do
-            fix_deps "$so" "@loader_path/"
-          done
-
-          # Fix stepper_native to find libs in OCC/Core/
-          for so in STEPper_NEXT/stepper_native*.so; do
-            [ -f "$so" ] || continue
-            fix_deps "$so" "@loader_path/OCC/Core/"
-          done
-
-          # Ad-hoc sign everything (required on macOS for modified binaries)
-          find STEPper_NEXT \( -name "*.dylib" -o -name "*.so" \) -print0 | while IFS= read -r -d '' f; do
-            codesign --force --sign - "$f" 2>/dev/null || true
-          done
-
-      - name: Create zip
+      - name: Smoke test (arm64 only — x64 module can't load in arm python)
         run: |
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION:-dev}"
-          zip -r "STEPper_NEXT-${VERSION}-macos-arm64.zip" STEPper_NEXT/
+          cd STEPper_NEXT-macos-arm64 && unzip -q wheels/*.whl -d test_site && cd ..
+          PYTHONPATH="$PWD/STEPper_NEXT-macos-arm64/test_site" python ci/smoke_test.py STEPper_NEXT-macos-arm64
+          rm -rf STEPper_NEXT-macos-arm64/test_site
+          # x64: structural check only
+          lipo -archs STEPper_NEXT-macos-x64/stepper_native.so | grep -q x86_64
+          for lib in STEPper_NEXT-macos-x64/native_libs/libTKernel.*.dylib; do
+            lipo -archs "$lib" | grep -q x86_64
+          done
 
-      - name: Upload artifact
+      - name: Create zips
+        run: |
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('blender_manifest.toml','rb'))['version'])")
+          (cd STEPper_NEXT-macos-arm64 && zip -qr "../stepper_next-${VERSION}-macos_arm64.zip" .)
+          (cd STEPper_NEXT-macos-x64 && zip -qr "../stepper_next-${VERSION}-macos_x64.zip" .)
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64-build
-          path: STEPper_NEXT-*-macos-arm64.zip
+          name: macos-builds
+          path: stepper_next-*-macos_*.zip
 
   # ════════════════════════════════════════════════════════════════════
-  # Linux build
+  # Linux (linux-x64)
   # ════════════════════════════════════════════════════════════════════
   build-linux:
     runs-on: ubuntu-latest
@@ -298,9 +275,9 @@ jobs:
           conda-remove-defaults: true
           python-version: '3.13'
 
-      - name: Install pythonocc-core and build tools
+      - name: Install OCCT and build tools
         run: |
-          conda install -y -c conda-forge pythonocc-core=7.9.3 numpy cmake ninja
+          conda install -y -c conda-forge occt=${OCCT_VERSION}=novtk* numpy cmake ninja
 
       - name: Build stepper_native
         run: |
@@ -312,94 +289,71 @@ jobs:
             -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
           cmake --build . --config Release
 
-      - name: Assemble addon
+      - name: Assemble extension
         run: |
           ADDON_DIR="STEPper_NEXT"
-          mkdir -p "$ADDON_DIR/OCC/Core"
-          mkdir -p "$ADDON_DIR/OCC/Wrapper"
-          mkdir -p "$ADDON_DIR/OCC/Display"
-          mkdir -p "$ADDON_DIR/OCC/Extend"
+          mkdir -p "$ADDON_DIR/wheels" "$ADDON_DIR/native_libs"
 
-          # Copy addon Python files
-          for f in __init__.py main.py importer.py trimesh.py nurbs.py six.py stepanalyzer.py; do
-            [ -f "$f" ] && cp "$f" "$ADDON_DIR/"
+          for f in __init__.py main.py importer.py trimesh.py nurbs.py ocp_utils.py stepanalyzer.py LICENSE README.md; do
+            cp "$f" "$ADDON_DIR/"
           done
-          cp LICENSE "$ADDON_DIR/"
-          cp README.md "$ADDON_DIR/"
-
-          # Copy OCC Python wrappers and stubs
-          cp OCC/__init__.py "$ADDON_DIR/OCC/"
-          cp OCC/LICENSE "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/AUTHORS "$ADDON_DIR/OCC/" 2>/dev/null || true
-          cp OCC/Wrapper/*.py "$ADDON_DIR/OCC/Wrapper/" 2>/dev/null || true
-
-          # Copy OCC Core .py and .pyi files from repo
-          cp OCC/Core/*.py "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          cp OCC/Core/*.pyi "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCC Core binary modules from conda (.so files)
-          CONDA_SP="$CONDA_PREFIX/lib/python3.13/site-packages"
-          cp "$CONDA_SP"/OCC/Core/*.so "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-
-          # Copy OCCT shared libs from conda (real files + symlinks)
-          for f in "$CONDA_PREFIX"/lib/libTK*.so*; do
-            [ -e "$f" ] && cp -P "$f" "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-          done
-          # Third-party libs (copy all versions + symlinks)
-          for pattern in libtbb libtbbmalloc libfreetype libz libxml2 libicuuc libicui18n libicudata liblzma; do
-            for f in "$CONDA_PREFIX"/lib/${pattern}*.so*; do
-              [ -e "$f" ] && cp -P "$f" "$ADDON_DIR/OCC/Core/" 2>/dev/null || true
-            done
-          done
-          # Resolve any dangling symlinks
-          for link in "$ADDON_DIR/OCC/Core"/*.so*; do
-            [ -L "$link" ] || continue
-            target=$(readlink "$link")
-            if [ ! -e "$ADDON_DIR/OCC/Core/$target" ] && [ -e "$CONDA_PREFIX/lib/$target" ]; then
-              cp "$CONDA_PREFIX/lib/$target" "$ADDON_DIR/OCC/Core/"
-            fi
-          done
-
-          # Copy built stepper_native
-          find native/build -name "stepper_native*.so" -exec cp {} "$ADDON_DIR/" \;
-
-          # Copy docs folder if present
           [ -d "docs" ] && cp -r docs "$ADDON_DIR/docs"
 
-      - name: Fix rpaths
-        run: |
-          CORE_DIR="STEPper_NEXT/OCC/Core"
+          WHEEL="cadquery_ocp_novtk-${OCP_VERSION}-cp313-cp313-manylinux_2_31_x86_64.whl"
+          cp "wheels/$WHEEL" "$ADDON_DIR/wheels/"
+          python ci/make_platform_manifest.py blender_manifest.toml linux-x64 "$WHEEL" "$ADDON_DIR/blender_manifest.toml"
 
-          # Set RPATH on all .so files in Core to look in same directory
-          for so in "$CORE_DIR"/*.so*; do
+          cp native/build/stepper_native.so "$ADDON_DIR/"
+          for tk in TKernel TKMath TKBRep TKG2d TKG3d TKGeomBase TKGeomAlgo TKTopAlgo TKShHealing TKMesh; do
+            for f in "$CONDA_PREFIX"/lib/lib${tk}.so*; do
+              [ -e "$f" ] && cp -P "$f" "$ADDON_DIR/native_libs/" || true
+            done
+          done
+          # Pull in extra conda deps of the TK subset (tbb etc.)
+          for lib in "$ADDON_DIR/native_libs"/*.so*; do
+            [ -f "$lib" ] || continue
+            [ -L "$lib" ] && continue
+            ldd "$lib" 2>/dev/null | awk '/=>/ {print $3}' | while read dep; do
+              case "$dep" in
+                "$CONDA_PREFIX"*)
+                  base=$(basename "$dep")
+                  [ ! -e "$ADDON_DIR/native_libs/$base" ] && cp "$dep" "$ADDON_DIR/native_libs/"
+                  ;;
+              esac
+            done
+          done
+
+      - name: Fix rpaths (native module only)
+        run: |
+          for so in STEPper_NEXT/native_libs/*.so*; do
             [ -f "$so" ] || continue
-            [ -L "$so" ] && continue  # skip symlinks
+            [ -L "$so" ] && continue
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
+          patchelf --set-rpath '$ORIGIN/native_libs' STEPper_NEXT/stepper_native.so
 
-          # Fix stepper_native to find libs in OCC/Core/
-          for so in STEPper_NEXT/stepper_native*.so; do
-            [ -f "$so" ] || continue
-            patchelf --set-rpath '$ORIGIN/OCC/Core' "$so" 2>/dev/null || true
-          done
+      - name: Smoke test
+        run: |
+          cd STEPper_NEXT && unzip -q wheels/*.whl -d test_site && cd ..
+          PYTHONPATH="$PWD/STEPper_NEXT/test_site" python ci/smoke_test.py STEPper_NEXT
+          rm -rf STEPper_NEXT/test_site
 
       - name: Create zip
         run: |
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION:-dev}"
-          zip -r "STEPper_NEXT-${VERSION}-linux.zip" STEPper_NEXT/
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('blender_manifest.toml','rb'))['version'])")
+          (cd STEPper_NEXT && zip -qr "../stepper_next-${VERSION}-linux_x64.zip" .)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: STEPper_NEXT-*-linux.zip
+          path: stepper_next-*-linux_x64.zip
 
   # ════════════════════════════════════════════════════════════════════
   # Create GitHub Release (runs after all builds complete)
   # ════════════════════════════════════════════════════════════════════
   release:
-    needs: [build-windows, build-macos-arm64, build-linux]
+    needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     # Only create release on tag push or manual dispatch with version
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.version != ''
@@ -421,18 +375,23 @@ jobs:
           body: |
             ## STEPper NEXT ${{ github.event.inputs.version || github.ref_name }}
 
-            ### Downloads
-            - **Windows (64-bit):** `STEPper_NEXT-*-windows.zip`
-            - **macOS Apple Silicon (M1/M2/M3/M4):** `STEPper_NEXT-*-macos-arm64.zip`
-            - **Linux (64-bit):** `STEPper_NEXT-*-linux.zip`
+            Blender **extension** packages (Blender 5.1+, Python 3.13). The
+            OpenCASCADE (OCP) bindings ship as a bundled wheel that Blender
+            installs automatically.
 
-            ### Requirements
-            - Blender 5.1 with Python 3.13
+            ### Downloads
+            - **Windows (64-bit):** `stepper_next-*-windows_x64.zip`
+            - **macOS Apple Silicon:** `stepper_next-*-macos_arm64.zip`
+            - **macOS Intel:** `stepper_next-*-macos_x64.zip`
+            - **Linux (64-bit):** `stepper_next-*-linux_x64.zip`
 
             ### Installation
             1. Download the `.zip` for your platform
-            2. In Blender: **Edit > Preferences > Add-ons > Install...** → select the `.zip`
-            3. Enable the addon in the list
+            2. In Blender: **Edit > Preferences > Get Extensions >** (drop-down top-right) **> Install from Disk...** → select the `.zip` (or drag & drop the zip into Blender)
+            3. Enable it under **Add-ons** if not enabled automatically
+
+            If upgrading from a pre-2.3 legacy addon install, remove the old
+            "STEPper NEXT" addon first (Preferences > Add-ons).
 
             ---
             *Built automatically by GitHub Actions*

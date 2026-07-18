@@ -1,6 +1,9 @@
 /__pycache__
-/OCC/Core/__pycache__
-/OCC/__pycache__
-/OCC/Wrapper/__pycache__
-/OCC/Wrapper/__pycache__
 /MaterialDB
+
+# Locally vendored OCP bindings for the legacy scripts/addons dev workflow.
+# Extension installs get OCP from wheels/ via blender_manifest.toml instead.
+# To vendor locally: unzip wheels/cadquery_ocp_novtk-*-win_amd64.whl here.
+/OCP/
+/cadquery_ocp_novtk.libs/
+/OCP_licenses/

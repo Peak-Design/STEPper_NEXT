@@ -23,13 +23,16 @@
 #   - Fixed crash: validate face triangulations before native C++ extraction
 #   - Renamed to STEPper NEXT, auto-apply scale, skip empty objects (v2.1.3)
 #   - Material database system, multi-user scale fix (v2.2.0)
+#   - Migrated OCC bindings from pythonocc-core to OCP (cadquery-ocp-novtk
+#     7.9.3.1.1, pybind11); native module reworked to a BinTools serialize
+#     handoff, decoupling it from the Python bindings' ABI (v2.3.0)
 
 bl_info = {
     "name": "STEPper NEXT",
     "author": "ambi, Peak-Design",
     "description": "STEP OpenCASCADE import",
     "blender": (5, 1, 0),
-    "version": (2, 2, 1),
+    "version": (2, 3, 0),
     "location": "3D View > Tools panel > STEPper NEXT",
     "category": "Import",
 }

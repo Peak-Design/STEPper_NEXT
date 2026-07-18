@@ -20,6 +20,8 @@
 #   - Added failed parts diagnostics
 #   - Added ShapeFix healing and per-face entity recovery for broken shapes
 #   - Scoped face recovery to only unmapped entities (prevents geometry bleed)
+#   - Migrated to OCP bindings (cadquery-ocp-novtk 7.9.3.1.1 / OCCT 7.9.3);
+#     native module now receives faces via BinTools serialize handoff
 
 import sys
 from os.path import dirname
@@ -41,30 +43,27 @@ from . import trimesh
 from . import nurbs
 
 importlib.reload(trimesh)
-from OCC.Core.BRep import BRep_Builder, BRep_Tool
-from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
-from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
-from OCC.Core.BRepLProp import BRepLProp_SLProps
-from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-from OCC.Core.BRepTools import breptools
-from OCC.Core.ShapeFix import ShapeFix_Shape
-from OCC.Core.GeomConvert import geomconvert_SurfaceToBSplineSurface
-from OCC.Core.gp import gp, gp_Dir, gp_Pln, gp_Pnt, gp_Pnt2d, gp_Trsf, gp_Vec, gp_XYZ
+import io
 
-# from OCC.Core.Standard import Standard_Real
-from OCC.Core.IFSelect import IFSelect_RetDone
-
-from OCC.Core.Interface import Interface_Static
-from OCC.Core.Poly import poly
-from OCC.Core.Quantity import Quantity_Color, Quantity_TOC_RGB
-from OCC.Core.STEPCAFControl import STEPCAFControl_Reader
-from OCC.Core.STEPControl import STEPControl_Reader
-
-# from OCC.Core.TCollection import TCollection_ExtendedString
-from OCC.Core.TColStd import TColStd_SequenceOfAsciiString
-from OCC.Core.TDF import TDF_Label, TDF_LabelSequence
-from OCC.Core.TDocStd import TDocStd_Document
-from OCC.Core.TopAbs import (
+from OCP.BRep import BRep_Builder, BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+from OCP.BRepLProp import BRepLProp_SLProps
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.BRepTools import BRepTools
+from OCP.BinTools import BinTools, BinTools_FormatVersion
+from OCP.ShapeFix import ShapeFix_Shape
+from OCP.GeomConvert import GeomConvert
+from OCP.gp import gp, gp_Dir, gp_Pln, gp_Pnt, gp_Pnt2d, gp_Trsf, gp_Vec, gp_XYZ
+from OCP.IFSelect import IFSelect_RetDone
+from OCP.Interface import Interface_Static
+from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+from OCP.STEPCAFControl import STEPCAFControl_Reader
+from OCP.TCollection import TCollection_ExtendedString
+from OCP.TColStd import TColStd_SequenceOfAsciiString
+from OCP.TDF import TDF_Label, TDF_LabelSequence
+from OCP.TDocStd import TDocStd_Document
+from OCP.TopAbs import (
     TopAbs_COMPOUND,
     TopAbs_EDGE,
     TopAbs_FACE,
@@ -75,23 +74,25 @@ from OCC.Core.TopAbs import (
     TopAbs_SOLID,
     TopAbs_VERTEX,
     TopAbs_WIRE,
-    topabs_ShapeTypeToString,
 )
-from OCC.Core.TopExp import TopExp_Explorer
-from OCC.Core.TopLoc import TopLoc_Location
-
-# from OCC.Core.TopExp import topexp_MapShapes
-# from OCC.Core.TopTools import TopTools_MapOfShape, TopTools_IndexedMapOfShape
-from OCC.Core.TopoDS import TopoDS_Shape, TopoDS_Compound, topods
-from OCC.Core.XCAFApp import XCAFApp_Application_GetApplication
-from OCC.Core.XCAFDoc import XCAFDoc_DocumentTool, XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_ColorCurv
-# XSControl_WorkSession no longer needed — using XCAF reader's ChangeReader()
-from OCC.Core.StepBasic import StepBasic_ProductDefinition
-from OCC.Core.StepRepr import (
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopLoc import TopLoc_Location
+from OCP.TopoDS import TopoDS_Shape, TopoDS_Compound, TopoDS
+from OCP.XCAFApp import XCAFApp_Application
+from OCP.XCAFDoc import (
+    XCAFDoc_DocumentTool,
+    XCAFDoc_ShapeTool,
+    XCAFDoc_ColorTool,
+    XCAFDoc_ColorGen,
+    XCAFDoc_ColorSurf,
+    XCAFDoc_ColorCurv,
+)
+from OCP.StepBasic import StepBasic_ProductDefinition
+from OCP.StepRepr import (
     StepRepr_ProductDefinitionShape,
     StepRepr_ShapeRepresentationRelationship,
 )
-from OCC.Core.StepShape import (
+from OCP.StepShape import (
     StepShape_AdvancedBrepShapeRepresentation,
     StepShape_ManifoldSolidBrep,
     StepShape_ManifoldSurfaceShapeRepresentation,
@@ -99,15 +100,28 @@ from OCC.Core.StepShape import (
     StepShape_ShellBasedSurfaceModel,
 )
 
-import OCC
+from OCP.OCP import __version__ as OCP_VERSION
 
-print("--> STEPper NEXT OpenCASCADE version:", OCC.VERSION)
+from ocp_utils import ShapeKey, get_label_name
 
-# Native C++ acceleration for mesh extraction (optional)
+print("--> STEPper NEXT OpenCASCADE (OCP) version:", OCP_VERSION)
+
+# Native C++ acceleration for mesh extraction (optional).  The module links
+# its own plain-named OCCT subset shipped in native_libs/ (the vendored OCP
+# wheel's DLLs are name-mangled and not linkable).
+if os.name == "nt":
+    _native_libs_dir = os.path.join(file_dirname, "native_libs")
+    if os.path.isdir(_native_libs_dir):
+        os.add_dll_directory(_native_libs_dir)
 try:
     from . import stepper_native
-    _HAS_NATIVE = True
-    print("--> STEPper NEXT native acceleration: ENABLED")
+    # The OCP-era native module exposes mesh_and_extract (BinTools serialize
+    # handoff).  An old pythonocc-era binary lacks it and cannot be used.
+    _HAS_NATIVE = hasattr(stepper_native, "mesh_and_extract")
+    if _HAS_NATIVE:
+        print("--> STEPper NEXT native acceleration: ENABLED")
+    else:
+        print("--> STEPper NEXT native acceleration: incompatible binary (using Python fallback)")
 except ImportError:
     _HAS_NATIVE = False
     print("--> STEPper NEXT native acceleration: not available (using Python fallback)")
@@ -261,7 +275,8 @@ class NativeMeshData:
 
 
 def b_colorname(col):
-    return Quantity_Color.StringName(Quantity_Color.Name(col))
+    return Quantity_Color.StringName_s(
+        Quantity_Color.Name_s(col.Red(), col.Green(), col.Blue()))
 
 
 def b_XYZ(v):
@@ -279,8 +294,8 @@ def nurbs_parse(current_face):
     nurbs_converter = BRepBuilderAPI_NurbsConvert(current_face)
     nurbs_converter.Perform(current_face)
     result_shape = nurbs_converter.Shape()
-    brep_face = BRep_Tool.Surface(topods.Face(result_shape))
-    occ_face = geomconvert_SurfaceToBSplineSurface(brep_face)
+    brep_face = BRep_Tool.Surface_s(TopoDS.Face_s(result_shape))
+    occ_face = GeomConvert.SurfaceToBSplineSurface_s(brep_face)
 
     # extract the Control Points of each face
     n_poles_u = occ_face.NbUPoles()
@@ -428,7 +443,7 @@ class ShapeTree:
 
     def add(self, parent, label) -> ShapeTreeNode:
         loc = len(self.nodes)
-        name = label.GetLabelName()
+        name = get_label_name(label)
         node = ShapeTreeNode(parent, loc, label.Tag(), name)
         self.nodes[parent].children.append(loc)
         self.nodes.append(node)
@@ -453,9 +468,9 @@ class ReadSTEP:
         colorset = False
         colortype = None
 
-        c_gen = self.color_tool.GetColor(label, int(XCAFDoc_ColorGen), c)
-        c_surf = self.color_tool.GetColor(label, int(XCAFDoc_ColorSurf), c)
-        c_curv = self.color_tool.GetColor(label, int(XCAFDoc_ColorCurv), c)
+        c_gen = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorGen, c)
+        c_surf = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorSurf, c)
+        c_curv = XCAFDoc_ColorTool.GetColor_s(label, XCAFDoc_ColorCurv, c)
         if c_gen or c_surf or c_curv:
             colorset = True
             colortype = c_gen * 1 + c_surf * 2 + c_curv * 3
@@ -467,12 +482,12 @@ class ReadSTEP:
         clabs = TDF_LabelSequence()
         self.color_tool.GetColors(clabs)
         for i in range(clabs.Length()):
-            res = self.color_tool.GetColor(clabs.Value(i + 1), tcol)
+            res = XCAFDoc_ColorTool.GetColor_s(clabs.Value(i + 1), tcol)
             if res:
                 print(b_colorname(tcol))
 
     def label_matrix(self, lab):
-        trsf = self.shape_tool.GetLocation(lab).Transformation()
+        trsf = XCAFDoc_ShapeTool.GetLocation_s(lab).Transformation()
         matrix = np.eye(4, dtype=np.float32)
         for row in range(1, 4):
             for col in range(1, 5):
@@ -485,7 +500,7 @@ class ReadSTEP:
         ex = TopExp_Explorer(shp, te_type)
         # Todo: use label->tag
         while ex.More():
-            c = ex.Current()
+            c = ShapeKey(ex.Current())
             if c not in c_set:
                 c_set.add(c)
             ex.Next()
@@ -503,15 +518,15 @@ class ReadSTEP:
         )
 
     def shape_info(self, shp):
-        st = self.shape_tool
-        lab = self.shape_label[shp]
+        st = XCAFDoc_ShapeTool
+        lab = self.shape_label[ShapeKey(shp)]
         vals = (
-            st.IsAssembly(lab),
-            st.IsFree(lab),
-            st.IsShape(lab),
-            st.IsCompound(lab),
-            st.IsComponent(lab),
-            st.IsSimpleShape(lab),
+            st.IsAssembly_s(lab),
+            st.IsFree_s(lab),
+            st.IsShape_s(lab),
+            st.IsCompound_s(lab),
+            st.IsComponent_s(lab),
+            st.IsSimpleShape_s(lab),
             shp.Locked(),
         )
 
@@ -528,7 +543,7 @@ class ReadSTEP:
         print("Init transfer with units")
 
         # Init new doc and reader
-        doc = TDocStd_Document("STEP")
+        doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
         step_reader = STEPCAFControl_Reader()
         step_reader.SetColorMode(True)
         step_reader.SetNameMode(True)
@@ -622,9 +637,8 @@ class ReadSTEP:
 
             if not transfer_ok:
                 # Retry with mode 0: discard surface curves from file
-                from OCC.Core.Interface import Interface_Static
-                Interface_Static.SetIVal("read.surfacecurve.mode", 0)
-                doc = TDocStd_Document("STEP")
+                Interface_Static.SetIVal_s("read.surfacecurve.mode", 0)
+                doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
                 step_reader = STEPCAFControl_Reader()
                 step_reader.SetColorMode(True)
                 step_reader.SetNameMode(True)
@@ -637,7 +651,7 @@ class ReadSTEP:
                 else:
                     print("DataExchange: Transfer done (safe mode)")
                 # Reset to default for any subsequent imports
-                Interface_Static.SetIVal("read.surfacecurve.mode", 1)
+                Interface_Static.SetIVal_s("read.surfacecurve.mode", 1)
         else:
             transfer_result = step_reader.Transfer(doc)
             if not transfer_result:
@@ -653,9 +667,9 @@ class ReadSTEP:
         print("Init simple transfer")
 
         # Create the application, empty document and shape_tool
-        doc = TDocStd_Document("STEP")
-        app = XCAFApp_Application_GetApplication()
-        app.NewDocument("MDTV-XCAF", doc)
+        doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+        app = XCAFApp_Application.GetApplication_s()
+        app.NewDocument(TCollection_ExtendedString("MDTV-XCAF"), doc)
 
         # Read file and return populated doc
         step_reader = STEPCAFControl_Reader()
@@ -680,8 +694,8 @@ class ReadSTEP:
         self.transfer_with_units(self.filename)
         # self.transfer_simple(self.filename)
 
-        self.shape_tool = XCAFDoc_DocumentTool.ShapeTool(self.doc.Main())
-        self.color_tool = XCAFDoc_DocumentTool.ColorTool(self.doc.Main())
+        self.shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        self.color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
 
         # material_tool = XCAFDoc_DocumentTool_MaterialTool(doc.Main())
         # layer_tool = XCAFDoc_DocumentTool_LayerTool(doc.Main())
@@ -701,6 +715,7 @@ class ReadSTEP:
         self._lock = threading.Lock()  # Protects import_problems, skipped_shapes, recovered_parts
         self._pre_tessellated = False
         self._recovery_compounds = None  # Lazy-built recovery compound
+        self._recovery_keepalive = None  # Keeps entity wrappers (and ids) stable
 
     def read_file(self, filename):
         """Returns list of tuples (topods_shape, label, color)
@@ -715,7 +730,7 @@ class ReadSTEP:
         def _cprio(lab, shape):
             "Get label color"
             tc, ctype, ok = self.query_color(lab)
-            self.face_colors[shape] = tc if ok else None
+            self.face_colors[ShapeKey(shape)] = tc if ok else None
             if ok:
                 return ctype
             else:
@@ -724,15 +739,15 @@ class ReadSTEP:
         def _get_sub_shapes(lab, level, tree, leaf_id):
 
             master_leaf = tree.nodes[leaf_id]
-            if self.shape_tool.IsAssembly(lab):
+            if XCAFDoc_ShapeTool.IsAssembly_s(lab):
                 # Read contained shapes
                 l_c = TDF_LabelSequence()
-                self.shape_tool.GetComponents(lab, l_c)
+                XCAFDoc_ShapeTool.GetComponents_s(lab, l_c)
                 for i in range(l_c.Length()):
                     label = l_c.Value(i + 1)
-                    if self.shape_tool.IsReference(label):
+                    if XCAFDoc_ShapeTool.IsReference_s(label):
                         label_reference = TDF_Label()
-                        self.shape_tool.GetReferredShape(label, label_reference)
+                        XCAFDoc_ShapeTool.GetReferredShape_s(label, label_reference)
 
                         label_transform = self.label_matrix(label)
                         node = tree.add(master_leaf.index, label_reference)
@@ -745,27 +760,28 @@ class ReadSTEP:
                         # TODO: process rest of the data
                         pass
 
-            elif self.shape_tool.IsSimpleShape(lab):
+            elif XCAFDoc_ShapeTool.IsSimpleShape_s(lab):
                 # TODO: self.shape_label stops being unique when shapes aren't transformed
-                shape = self.shape_tool.GetShape(lab)
+                shape = XCAFDoc_ShapeTool.GetShape_s(lab)
                 master_leaf.set_shape(shape)
-                if shape in self.shape_label:
+                key = ShapeKey(shape)
+                if key in self.shape_label:
                     # Shape already in
                     return
 
-                self.shape_label[shape] = lab
+                self.shape_label[key] = lab
 
-                self.face_color_priority[shape] = _cprio(lab, shape)
+                self.face_color_priority[key] = _cprio(lab, shape)
 
                 l_subss = TDF_LabelSequence()
-                self.shape_tool.GetSubShapes(lab, l_subss)
-                self.sub_shapes[shape] = []
+                XCAFDoc_ShapeTool.GetSubShapes_s(lab, l_subss)
+                self.sub_shapes[key] = []
                 for i in range(l_subss.Length()):
                     lab_subs = l_subss.Value(i + 1)
-                    shape_sub = self.shape_tool.GetShape(lab_subs)
-                    self.shape_label[shape_sub] = lab_subs
-                    self.sub_shapes[shape].append(shape_sub)
-                    self.face_color_priority[shape_sub] = _cprio(lab_subs, shape_sub)
+                    shape_sub = XCAFDoc_ShapeTool.GetShape_s(lab_subs)
+                    self.shape_label[ShapeKey(shape_sub)] = lab_subs
+                    self.sub_shapes[key].append(shape_sub)
+                    self.face_color_priority[ShapeKey(shape_sub)] = _cprio(lab_subs, shape_sub)
                 # Color priority is the same as CAD assistant material tree display
             else:
                 print("DataExchange error: Item is neither assembly or a simple shape")
@@ -802,11 +818,10 @@ class ReadSTEP:
             self._pre_tessellated = True
             return
 
-        def _tessellate_group(shape):
-            brt = breptools()
-            iter_shapes = [shape] + self.sub_shapes.get(shape, [])
+        def _tessellate_group(key):
+            iter_shapes = [key.shape] + self.sub_shapes.get(key, [])
             for shp in iter_shapes:
-                brt.Clean(shp)
+                BRepTools.Clean_s(shp)
                 ex = TopExp_Explorer(shp, TopAbs_FACE)
                 if ex.More():
                     brepmesh = BRepMesh_IncrementalMesh(shp, lin_def, False, ang_def, False)
@@ -829,9 +844,8 @@ class ReadSTEP:
         self._pre_tessellated = True
 
     def triangulate_face(self, face, tform):
-        bt = BRep_Tool()
         location = TopLoc_Location()
-        facing = bt.Triangulation(face, location)
+        facing = BRep_Tool.Triangulation_s(face, location)
         if facing is None:
             with self._lock:
                 self.import_problems["Triangulation"] += 1
@@ -846,7 +860,7 @@ class ReadSTEP:
 
         # Surface-based normal computation (analytic, seamless across faces)
         surface = BRepAdaptor_Surface(face)
-        prop = BRepLProp_SLProps(surface, 2, gp.Resolution())
+        prop = BRepLProp_SLProps(surface, 2, gp.Resolution_s())
 
         has_uvs = facing.HasUVNodes()
 
@@ -897,10 +911,9 @@ class ReadSTEP:
             norms[t - 1] = nn
 
         # Read all triangles
-        tri = facing.Triangles()
         tris = [None] * d_nbtriangles
         for t in range(1, d_nbtriangles + 1):
-            T1, T2, T3 = tri.Value(t).Get()
+            T1, T2, T3 = facing.Triangle(t).Get()
             if not_forward:
                 T1, T2 = T2, T1
             tris[t - 1] = (T1 - 1, T2 - 1, T3 - 1)
@@ -930,10 +943,10 @@ class ReadSTEP:
         3. For each failed representation (not in the TransientProcess),
            traverse its hierarchy to collect its AdvancedFace entity indices.
         4. Transfer each repr's faces into a separate compound.
-        5. Map each compound by ProductDefinition entity number so that
+        5. Map each compound by ProductDefinition wrapper id so that
            _get_recovery_compound(shape) can match via EntityFromShapeResult.
 
-        Results are cached in self._recovery_compounds (dict: PD# → compound).
+        Results are cached in self._recovery_compounds (dict: id(PD) → compound).
         """
         if self._recovery_compounds is not None:
             return  # already built
@@ -946,20 +959,39 @@ class ReadSTEP:
             xcaf_model = basic_reader.StepModel()
             ne = xcaf_model.NbEntities()
 
-            # Index all AdvancedFace entities by hash for hierarchy matching
-            af_hash_to_idx = {}
-            for i in range(1, ne + 1):
-                ent = xcaf_model.Value(i)
-                if ent is not None and ent.DynamicType().Name() == 'StepShape_AdvancedFace':
-                    af_hash_to_idx[hash(ent)] = i
+            # Single pass over the model.  The entity wrapper list doubles as
+            # a keep-alive: under pybind11 the same underlying transient
+            # always resolves to the same live wrapper, so id(ent) is a
+            # stable key while this list exists.  Stored on self because
+            # _get_recovery_compound() matches EntityFromShapeResult wrappers
+            # against these ids later.
+            ents = [xcaf_model.Value(i) for i in range(1, ne + 1)]
+            self._recovery_keepalive = ents
+            type_names = [
+                ent.DynamicType().Name() if ent is not None else ""
+                for ent in ents
+            ]
 
-            if not af_hash_to_idx:
+            # Index all AdvancedFace entities (id → 1-based model index)
+            af_id_to_idx = {}
+            for i, tname in enumerate(type_names):
+                if tname == 'StepShape_AdvancedFace':
+                    af_id_to_idx[id(ents[i])] = i + 1
+
+            if not af_id_to_idx:
                 return
+
+            # Which entities actually transferred?  OCP's per-entity lookup
+            # methods (MapIndex/IsBound/Find) are broken in 7.9.3.1 — they
+            # always miss and are ~250µs per call — so enumerate the mapped
+            # entities once and compare wrapper identity instead.
+            mapped = [tp.Mapped(i) for i in range(1, tp.NbMapped() + 1)]
+            mapped_ids = {id(m) for m in mapped}
 
             def _collect_faces_from_shell(shell, face_set):
                 """Collect AdvancedFace model indices from a ConnectedFaceSet."""
                 for m in range(1, shell.NbCfsFaces() + 1):
-                    idx = af_hash_to_idx.get(hash(shell.CfsFacesValue(m)))
+                    idx = af_id_to_idx.get(id(shell.CfsFacesValue(m)))
                     if idx is not None:
                         face_set.add(idx)
 
@@ -968,59 +1000,52 @@ class ReadSTEP:
             # Resolve generic ShapeRepresentation → specific MSSR/ABSR
             # via ShapeRepresentationRelationship
             generic_to_specific = {}
-            for i in range(1, ne + 1):
-                ent = xcaf_model.Value(i)
-                if ent is None or ent.DynamicType().Name() != 'StepRepr_ShapeRepresentationRelationship':
+            for ent, tname in zip(ents, type_names):
+                if tname != 'StepRepr_ShapeRepresentationRelationship':
                     continue
-                srr = StepRepr_ShapeRepresentationRelationship.DownCast(ent)
-                rep1, rep2 = srr.Rep1(), srr.Rep2()
+                rep1, rep2 = ent.Rep1(), ent.Rep2()
                 t1 = rep1.DynamicType().Name() if rep1 else ""
                 t2 = rep2.DynamicType().Name() if rep2 else ""
                 if 'ManifoldSurface' in t2 or 'AdvancedBrep' in t2:
-                    generic_to_specific[xcaf_model.Number(rep1)] = rep2
+                    generic_to_specific[id(rep1)] = rep2
                 elif 'ManifoldSurface' in t1 or 'AdvancedBrep' in t1:
-                    generic_to_specific[xcaf_model.Number(rep2)] = rep1
+                    generic_to_specific[id(rep2)] = rep1
 
-            # SDR → PDS → PD, giving us PD entity number → repr entity
-            pd_num_to_repr_ent = {}
-            for i in range(1, ne + 1):
-                ent = xcaf_model.Value(i)
-                if ent is None or ent.DynamicType().Name() != 'StepShape_ShapeDefinitionRepresentation':
+            # SDR → PDS → PD, giving us PD entity id → repr entity
+            pd_id_to_repr_ent = {}
+            for ent, tname in zip(ents, type_names):
+                if tname != 'StepShape_ShapeDefinitionRepresentation':
                     continue
-                sdr = StepShape_ShapeDefinitionRepresentation.DownCast(ent)
-                used_repr = sdr.UsedRepresentation()
+                used_repr = ent.UsedRepresentation()
                 if used_repr is None:
                     continue
-                actual_repr = generic_to_specific.get(
-                    xcaf_model.Number(used_repr), used_repr)
-                defn = sdr.Definition()
+                actual_repr = generic_to_specific.get(id(used_repr), used_repr)
+                defn = ent.Definition()
                 if defn is None:
                     continue
                 try:
-                    pds = StepRepr_ProductDefinitionShape.DownCast(defn.Value())
-                    pd = StepBasic_ProductDefinition.DownCast(
-                        pds.Definition().Value())
-                    pd_num_to_repr_ent[xcaf_model.Number(pd)] = actual_repr
+                    pds = defn.Value()
+                    pd = pds.Definition().Value()
+                    pd_id_to_repr_ent[id(pd)] = actual_repr
                 except Exception:
                     pass
 
             # --- Collect faces per failed representation ---
-            repr_num_to_faces = {}  # repr entity number → set of face indices
+            repr_num_to_faces = {}  # repr model index → set of face indices
+            repr_id_to_num = {}     # repr wrapper id → repr model index
 
-            for i in range(1, ne + 1):
-                ent = xcaf_model.Value(i)
-                if ent is None or tp.MapIndex(ent) > 0:
+            for i, (ent, tname) in enumerate(zip(ents, type_names)):
+                if ent is None or id(ent) in mapped_ids:
                     continue
-                tname = ent.DynamicType().Name()
                 faces = set()
 
                 if tname == 'StepShape_ManifoldSurfaceShapeRepresentation':
-                    mssr = StepShape_ManifoldSurfaceShapeRepresentation.DownCast(ent)
+                    mssr = ent
                     for j in range(1, mssr.NbItems() + 1):
                         item = mssr.ItemsValue(j)
                         if item.DynamicType().Name() != 'StepShape_ShellBasedSurfaceModel':
                             continue
-                        sbsm = StepShape_ShellBasedSurfaceModel.DownCast(item)
+                        sbsm = item
                         for k in range(1, sbsm.NbSbsmBoundary() + 1):
                             shell_select = sbsm.SbsmBoundaryValue(k)
                             shell = None
@@ -1037,27 +1062,28 @@ class ReadSTEP:
                                 _collect_faces_from_shell(shell, faces)
 
                 elif tname == 'StepShape_AdvancedBrepShapeRepresentation':
-                    absr = StepShape_AdvancedBrepShapeRepresentation.DownCast(ent)
+                    absr = ent
                     for j in range(1, absr.NbItems() + 1):
                         item = absr.ItemsValue(j)
                         if item.DynamicType().Name() == 'StepShape_ManifoldSolidBrep':
-                            msb = StepShape_ManifoldSolidBrep.DownCast(item)
+                            msb = item
                             outer = msb.Outer()
                             if outer is not None:
                                 _collect_faces_from_shell(outer, faces)
 
                 if faces:
-                    repr_num_to_faces[i] = faces
+                    repr_num_to_faces[i + 1] = faces
+                    repr_id_to_num[id(ent)] = i + 1
 
             if not repr_num_to_faces:
                 return
 
-            # --- Build PD# → repr# mapping (only for failed reprs) ---
-            pd_num_to_repr_num = {}
-            for pd_num, repr_ent in pd_num_to_repr_ent.items():
-                repr_num = xcaf_model.Number(repr_ent)
-                if repr_num in repr_num_to_faces:
-                    pd_num_to_repr_num[pd_num] = repr_num
+            # --- Build PD id → repr model index (only for failed reprs) ---
+            pd_id_to_repr_num = {}
+            for pd_id, repr_ent in pd_id_to_repr_ent.items():
+                repr_num = repr_id_to_num.get(id(repr_ent))
+                if repr_num is not None:
+                    pd_id_to_repr_num[pd_id] = repr_num
 
             # --- Transfer faces per repr into compounds ---
             # Reuse the existing reader's model (avoids re-reading STEP file)
@@ -1108,11 +1134,11 @@ class ReadSTEP:
 
             print(f"[recovery transfer: {_time.time() - t_rec_start:.1f}s]", end="", flush=True)
 
-            # --- Build final PD# → compound map ---
-            for pd_num, repr_num in pd_num_to_repr_num.items():
+            # --- Build final PD id → compound map ---
+            for pd_id, repr_num in pd_id_to_repr_num.items():
                 compound = repr_num_to_compound.get(repr_num)
                 if compound is not None:
-                    self._recovery_compounds[pd_num] = compound
+                    self._recovery_compounds[pd_id] = compound
 
             # Store TransferReader reference for shape→entity lookup
             self._transfer_reader = tr
@@ -1135,13 +1161,12 @@ class ReadSTEP:
         if tr is None:
             return None
 
-        model = self._xcaf_reader.ChangeReader().StepModel()
         for mode in [-1, 1]:
             try:
                 ent = tr.EntityFromShapeResult(shape, mode)
                 if ent is not None:
-                    pd_num = model.Number(ent)
-                    compound = self._recovery_compounds.get(pd_num)
+                    # Wrapper identity matches self._recovery_keepalive keys
+                    compound = self._recovery_compounds.get(id(ent))
                     if compound is not None:
                         return compound
             except Exception:
@@ -1175,7 +1200,7 @@ class ReadSTEP:
         When skip_faulty is True, skip all healing/recovery retries — just
         tessellate once and return whatever we get.
         """
-        breptools().Clean(shp)
+        BRepTools.Clean_s(shp)
         brepmesh = BRepMesh_IncrementalMesh(shp, lin_def, False, ang_def, False)
         brepmesh.Perform()
 
@@ -1184,8 +1209,8 @@ class ReadSTEP:
         ex = TopExp_Explorer(shp, TopAbs_FACE)
         has_tris = False
         while ex.More():
-            face = topods.Face(ex.Current())
-            if BRep_Tool().Triangulation(face, test_loc) is not None:
+            face = TopoDS.Face_s(ex.Current())
+            if BRep_Tool.Triangulation_s(face, test_loc) is not None:
                 has_tris = True
                 break
             ex.Next()
@@ -1196,14 +1221,14 @@ class ReadSTEP:
         # Retry 1: heal shape then tessellate
         healed = self._heal_shape(shp)
         if healed is not shp:
-            breptools().Clean(healed)
+            BRepTools.Clean_s(healed)
             brepmesh = BRepMesh_IncrementalMesh(healed, lin_def, False, ang_def, False)
             brepmesh.Perform()
             print(f"\n  [healed] {part_name}", end="", flush=True)
             return healed
 
         # Retry 2: relax tolerances significantly
-        breptools().Clean(shp)
+        BRepTools.Clean_s(shp)
         brepmesh = BRepMesh_IncrementalMesh(shp, lin_def * 4.0, False, ang_def * 2.0, False)
         brepmesh.Perform()
         print(f"\n  [relaxed-tess] {part_name}", end="", flush=True)
@@ -1221,7 +1246,7 @@ class ReadSTEP:
         all_faces = TopExp_Explorer(shape, TopAbs_FACE)
         all_subs_empty = not all_faces.More()
         if all_subs_empty:
-            for ss in self.sub_shapes.get(shape, []):
+            for ss in self.sub_shapes.get(ShapeKey(shape), []):
                 ex_ss = TopExp_Explorer(ss, TopAbs_FACE)
                 if ex_ss.More():
                     all_subs_empty = False
@@ -1243,12 +1268,12 @@ class ReadSTEP:
             if recovered_shape is not None:
                 # Use recovered compound as the sole shape; discard sub_shapes
                 # since we no longer have XCAF label associations.
-                self.face_colors[recovered_shape] = self.face_colors.get(shape)
-                self.face_color_priority[recovered_shape] = self.face_color_priority.get(shape, 0)
+                self.face_colors[ShapeKey(recovered_shape)] = self.face_colors.get(ShapeKey(shape))
+                self.face_color_priority[ShapeKey(recovered_shape)] = self.face_color_priority.get(ShapeKey(shape), 0)
                 with self._lock:
                     self.recovered_parts.append(_part_name or "unknown")
 
-        iter_shapes = [shape] + self.sub_shapes[shape]
+        iter_shapes = [shape] + self.sub_shapes[ShapeKey(shape)]
         if recovered_shape is not None:
             iter_shapes = [recovered_shape]
         iter_shapes.sort(key=lambda x: x.Checked())
@@ -1261,7 +1286,7 @@ class ReadSTEP:
         batch = 0
 
         for shp_i, shp in enumerate(iter_shapes):
-            col = self.face_colors.get(shp)
+            col = self.face_colors.get(ShapeKey(shp))
             if col is not None:
                 col_rgb = b_RGB(col)
                 col_name = b_colorname(col)
@@ -1288,8 +1313,8 @@ class ReadSTEP:
                 ex = TopExp_Explorer(shp, TopAbs_FACE)
             else:
                 test_loc = TopLoc_Location()
-                test_face = topods.Face(ex.Current())
-                if BRep_Tool().Triangulation(test_face, test_loc) is None:
+                test_face = TopoDS.Face_s(ex.Current())
+                if BRep_Tool.Triangulation_s(test_face, test_loc) is None:
                     shp = self._tessellate_shape(
                         shp, lin_def, ang_def,
                         part_name=_part_name, skip_faulty=skip_faulty)
@@ -1298,11 +1323,11 @@ class ReadSTEP:
             trf = shp.Location().Transformation()
 
             while ex.More():
-                face = topods.Face(ex.Current())
+                face = TopoDS.Face_s(ex.Current())
                 idx = len(collected_faces)
                 collected_faces.append((face, trf, col_rgb, col_name, batch))
                 # Dedup: record last index for each face object
-                face_dedup[face] = idx
+                face_dedup[ShapeKey(face)] = idx
                 ex.Next()
                 batch += 1
 
@@ -1312,58 +1337,73 @@ class ReadSTEP:
         # ── Phase 2: Extract triangulations ───────────────────────────
         if _HAS_NATIVE:
             result = self._build_trimesh_native(
-                collected_faces, face_dedup, out_mesh)
+                collected_faces, face_dedup, out_mesh, lin_def, ang_def)
         else:
             result = self._build_trimesh_python(
                 collected_faces, face_dedup, out_mesh)
 
         return result
 
-    def _build_trimesh_native(self, collected_faces, face_dedup, out_mesh):
+    def _build_trimesh_native(self, collected_faces, face_dedup, out_mesh,
+                              lin_def=0.8, ang_def=0.5):
         """Use native C++ module to extract all face triangulations at once.
+
+        The deduped faces are packed into a compound and handed to the C++
+        module as BinTools-serialized bytes (triangulation included).  The
+        module deserializes with its own OCCT copy, meshes any face still
+        missing triangulation, extracts everything and returns flat numpy
+        arrays.  BinTools round-trips preserve compound insertion order, so
+        results align with the meta/face_refs lists built here.
 
         Returns a NativeMeshData object (not TriMesh) that holds flat numpy
         arrays ready for from_pydata + foreach_set in Blender.
         """
         dedup_indices = set(face_dedup.values())
 
-        face_ptrs = []
-        tform_ptrs = []
         meta = []  # parallel list: (col_rgb, col_name, batch)
         face_refs = []  # parallel list: (face_obj, trf_obj) for normal re-extraction
 
+        builder = BRep_Builder()
+        compound = TopoDS_Compound()
+        builder.MakeCompound(compound)
+
         test_loc = TopLoc_Location()
-        brep_tool = BRep_Tool()
         for i in sorted(dedup_indices):
             face, trf, col_rgb, col_name, batch_id = collected_faces[i]
-            # Verify face has valid, non-empty triangulation before passing to
-            # native module.  A face with a corrupt or empty triangulation
-            # (e.g. from healing) will crash the C++ OpenMP parallel loop.
-            tri = brep_tool.Triangulation(face, test_loc)
+            # Verify face has valid, non-empty triangulation before handing
+            # it to the native module (mirrors the Python fallback path).
+            tri = BRep_Tool.Triangulation_s(face, test_loc)
             if tri is None or tri.NbTriangles() == 0 or tri.NbNodes() == 0:
                 with self._lock:
                     self.import_problems["Triangulation"] += 1
                 continue
-            face_ptrs.append(int(face.this))
-            tform_ptrs.append(int(trf.this))
+            builder.Add(compound, face)
             meta.append((col_rgb, col_name, batch_id))
             face_refs.append((face, trf))
 
-        if not face_ptrs:
+        if not face_refs:
             return out_mesh
 
-        # Disable OpenMP parallelism for the native call.  OCC's
-        # Poly_Triangulation handles are not thread-safe for concurrent
-        # reads (HasCachedMinMax triggers lazy caching), causing
-        # intermittent crashes in the OpenMP parallel loop.  The native
-        # extraction is already very fast (~0.001s) so single-threading
-        # it costs almost nothing.
-        _limit_openmp_threads(1)
-        result = stepper_native.extract_face_meshes(face_ptrs, tform_ptrs)
-        _limit_openmp_threads(0)  # restore default
+        buf = io.BytesIO()
+        BinTools.Write_s(compound, buf, True, False,
+                         BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+        try:
+            result = stepper_native.mesh_and_extract(
+                buf.getvalue(), lin_def, ang_def)
+        except Exception as e:
+            print(f"\n  [native extraction failed ({e}); Python fallback]",
+                  end="", flush=True)
+            return self._build_trimesh_python(
+                collected_faces, face_dedup, out_mesh)
         (all_verts, all_norms, all_uvs, all_faces,
          face_starts, face_counts, vert_starts, vert_counts,
          failed_mask, undef_mask) = result
+
+        if len(failed_mask) != len(face_refs):
+            print("\n  [native face-count mismatch; Python fallback]",
+                  end="", flush=True)
+            return self._build_trimesh_python(
+                collected_faces, face_dedup, out_mesh)
 
         # Count problems
         n_failed = int(failed_mask.sum())
@@ -1380,7 +1420,7 @@ class ReadSTEP:
         # facing.Normal() produce discrete triangulation normals that have
         # floating-point noise at OCC face boundaries, causing visible seams.
         # Parallelized with threads — OCC SWIG releases the GIL.
-        _gp_res = gp.Resolution()
+        _gp_res = gp.Resolution_s()
 
         def _recompute_face_normals(j):
             face, trf = face_refs[j]
@@ -1527,7 +1567,7 @@ class ReadSTEP:
                 return []
 
             while ex.More():
-                pt = nurbs_parse(topods.Face(ex.Current()))
+                pt = nurbs_parse(TopoDS.Face_s(ex.Current()))
                 nbs.append(pt)
                 ex.Next()
 

@@ -1,0 +1,50 @@
+schema_version = "1.0.0"
+
+id = "stepper_next"
+version = "2.3.0"
+name = "STEPper NEXT"
+tagline = "STEP CAD importer"
+maintainer = "Peak-Design"
+type = "add-on"
+
+website = "https://github.com/Peak-Design/STEPper_NEXT"
+
+tags = ["Import-Export"]
+
+blender_version_min = "5.1.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+copyright = ["2021 Tommi Hyppänen", "2026 Peak-Design"]
+
+# The OCP OpenCASCADE bindings are delivered as wheels; Blender installs the
+# platform-matching one when the extension is enabled.  The stepper_native
+# acceleration module + its native_libs/ OCCT subset are added per platform
+# by CI (release.yml), which also narrows `platforms`/`wheels` to the single
+# platform of each build.
+platforms = ["windows-x64", "linux-x64", "macos-arm64", "macos-x64"]
+wheels = [
+  "./wheels/cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-win_amd64.whl",
+  "./wheels/cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-manylinux_2_31_x86_64.whl",
+  "./wheels/cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-macosx_11_0_arm64.whl",
+  "./wheels/cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-macosx_11_0_x86_64.whl",
+]
+
+[permissions]
+files = "Import STEP files"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.gitignore",
+  "/.gitattributes",
+  "/.claude/",
+  "/ci/",
+  "/native/",
+  "/MaterialDB/",
+  "/OCP/",
+  "/cadquery_ocp_novtk.libs/",
+  "/OCP_licenses/",
+]

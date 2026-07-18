@@ -72,22 +72,30 @@ Each row shows an original STEP material name and a dropdown to pick the replace
 
 ## Installation
 
+STEPper NEXT ships as a Blender **extension** (since v2.3.0). The OpenCASCADE
+(OCP) bindings are bundled as a wheel that Blender installs automatically.
+
 1. Download the `.zip` for your platform from the [Releases](../../releases) page.
-2. In Blender, go to **Edit > Preferences > Add-ons** and click **Install...**, then select the `.zip` file.
-3. Enable the addon in the Add-ons list.
+2. Drag & drop the `.zip` into a Blender window (or use **Edit > Preferences > Get Extensions >** drop-down menu **> Install from Disk...**).
+3. Enable it under **Add-ons** if it isn't enabled automatically.
 
 The importer panel will appear in **3D View > Tools panel > STEPper NEXT**.
+
+> **Upgrading from v2.2.x or older (legacy addon):** remove the old
+> "STEPper NEXT" entry from **Preferences > Add-ons** and restart Blender
+> before installing the extension.
 
 > **Note:** macOS and Linux builds are automatically compiled via GitHub Actions but have not been tested yet. If you encounter issues on these platforms, please [open an issue](../../issues).
 
 ## Uninstall / Update
 
-Restart Blender, then remove the addon from Preferences > Add-ons. To update, remove the old version first, restart Blender, then install the new `.zip`.
+Remove the extension from **Preferences > Get Extensions > Installed** (or Add-ons). To update, install the new `.zip` — Blender replaces the older version.
 
 ## Version History
 
 | Version | Blender | Changes |
 |---------|---------|---------|
+| 2.3.0   | 5.1     | Migrated OpenCASCADE bindings from pythonocc-core to OCP (cadquery-ocp-novtk 7.9.3.1.1); converted to Blender extension format with per-platform OCP wheels; added macOS Intel support; native mesh extraction reworked to a serialize handoff |
 | 2.2.0   | 5.1     | Material database system for automatic material replacement, fixed apply-scale on instanced/multi-user meshes |
 | 2.1.3   | 5.1     | Renamed to STEPper NEXT, auto-apply scale, skip empty objects, preferences now persist across sessions |
 | 2.1.x   | 5.1     | Multithreaded normal computation, performance optimizations, crash fixes for corrupt STEP files |
@@ -107,7 +115,11 @@ https://ko-fi.com/oskarasspalvys
 
 ## For Developers
 
-This repository contains pre-built Windows OCC binaries for direct use as a Blender addon during development. Cross-platform builds (Windows, macOS, Linux) are available on the [Releases](../../releases) page, built automatically via GitHub Actions from conda-forge packages.
+The OpenCASCADE (OCP) bindings come from the [cadquery-ocp-novtk](https://pypi.org/project/cadquery-ocp-novtk/) wheels committed in `wheels/` (one per platform, referenced by `blender_manifest.toml` — Blender installs the matching one at extension install time). A small native mesh-extraction module (`native/`) ships per platform with its own plain-named OCCT subset in `native_libs/`; it talks to the importer via a BinTools serialize handoff, so it is independent of the Python bindings. Per-platform extension zips are built by GitHub Actions (`.github/workflows/release.yml`), which narrows the manifest to one platform/wheel per zip via `ci/make_platform_manifest.py` and runs `ci/smoke_test.py` before packaging.
+
+For development in `scripts/addons` (legacy addon path, still supported via the retained `bl_info`): extract the Windows wheel into the addon folder so `import OCP` resolves — `python -m zipfile -e wheels/cadquery_ocp_novtk-*-win_amd64.whl .` (the extracted `OCP/` + `cadquery_ocp_novtk.libs/` folders are gitignored). Parity testing: `blender -b --factory-startup --python ci/parity_harness.py -- <file.step> <out.json>`.
+
+Note: on Windows the addon/extension must not live under a path longer than ~250 characters, or the bundled OpenCASCADE DLLs will fail to load (default Blender paths are fine).
 
 ## License
 

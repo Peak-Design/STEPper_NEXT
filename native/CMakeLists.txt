@@ -44,7 +44,7 @@ target_include_directories(stepper_native PRIVATE
 target_link_directories(stepper_native PRIVATE ${OCCT_LIB_DIR})
 
 target_link_libraries(stepper_native PRIVATE
-    TKernel TKMath TKBRep TKTopAlgo TKG3d
+    TKernel TKMath TKBRep TKTopAlgo TKG3d TKMesh
 )
 
 # Remove "lib" prefix on all platforms (Python expects bare module name)

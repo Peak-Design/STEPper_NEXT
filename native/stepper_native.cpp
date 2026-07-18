@@ -1,10 +1,15 @@
 /*
  * stepper_native.cpp — Fast mesh extraction from OCC triangulations.
  *
- * Python extension module that accepts SWIG pointer addresses for
- * TopoDS_Face and gp_Trsf objects, extracts triangulation data
- * (vertices, normals, UVs, faces) from each face, and returns
+ * Python extension module that receives a BinTools-serialized compound of
+ * faces (bytes), deserializes it with its own OCCT copy, meshes any face
+ * still missing triangulation, extracts triangulation data (vertices,
+ * normals, UVs, faces) from each face in compound order, and returns
  * concatenated numpy arrays ready for Blender import.
+ *
+ * The serialize handoff keeps this module independent of the Python OCC
+ * bindings (OCP/pybind11): only bytes cross the boundary, so the two OCCT
+ * copies in the process never exchange live objects.
  *
  * Copyright 2026 Peak-Design
  * License: GPL v3
@@ -19,18 +24,25 @@
 
 /* OpenCascade headers */
 #include <BRep_Tool.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <BinTools.hxx>
 #include <Poly_Triangulation.hxx>
+#include <Standard_Failure.hxx>
+#include <TopAbs_Orientation.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
-#include <TopAbs_Orientation.hxx>
-#include <TopLoc_Location.hxx>
-#include <gp_Trsf.hxx>
+#include <TopoDS_Shape.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 
-#include <vector>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
+#include <sstream>
+#include <string>
+#include <vector>
 
 /* ------------------------------------------------------------------ */
 /* Helper: extract triangulation data from a single face              */
@@ -47,7 +59,6 @@ struct FaceMesh {
 };
 
 static FaceMesh extract_one_face(const TopoDS_Face& face,
-                                 const gp_Trsf& trsf,
                                  int global_vert_offset)
 {
     FaceMesh fm;
@@ -123,45 +134,63 @@ static FaceMesh extract_one_face(const TopoDS_Face& face,
 /* ------------------------------------------------------------------ */
 /* Python-callable function                                           */
 /* ------------------------------------------------------------------ */
-static PyObject* py_extract_face_meshes(PyObject* /*self*/, PyObject* args)
+static PyObject* py_mesh_and_extract(PyObject* /*self*/, PyObject* args)
 {
-    PyObject* face_ptrs_list;
-    PyObject* tform_ptrs_list;
+    const char* data = nullptr;
+    Py_ssize_t data_len = 0;
+    double lin_def = 0.8;
+    double ang_def = 0.5;
 
-    if (!PyArg_ParseTuple(args, "OO", &face_ptrs_list, &tform_ptrs_list))
+    if (!PyArg_ParseTuple(args, "y#dd", &data, &data_len, &lin_def, &ang_def))
         return NULL;
 
-    Py_ssize_t n = PyList_Size(face_ptrs_list);
-    if (n != PyList_Size(tform_ptrs_list)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "face_ptrs and tform_ptrs must have the same length");
-        return NULL;
-    }
-
-    /* Extract all face meshes */
-    std::vector<FaceMesh> meshes(n);
+    /* Deserialize, mesh and extract without holding the GIL — this is the
+     * expensive, pure-C++ part. */
+    std::vector<FaceMesh> meshes;
     int total_verts = 0;
     int total_tris  = 0;
+    std::string error_msg;
 
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        /* Get SWIG pointer addresses */
-        uintptr_t face_addr = static_cast<uintptr_t>(
-            PyLong_AsUnsignedLongLong(PyList_GetItem(face_ptrs_list, i)));
-        uintptr_t trsf_addr = static_cast<uintptr_t>(
-            PyLong_AsUnsignedLongLong(PyList_GetItem(tform_ptrs_list, i)));
+    Py_BEGIN_ALLOW_THREADS
+    try {
+        std::string buffer(data, static_cast<size_t>(data_len));
+        std::istringstream stream(buffer, std::ios::in | std::ios::binary);
 
-        if (PyErr_Occurred()) return NULL;
+        TopoDS_Shape shape;
+        BinTools::Read(shape, stream);
+        if (shape.IsNull()) {
+            error_msg = "BinTools::Read produced a null shape";
+        } else {
+            /* Safety net: mesh faces that still lack triangulation.  Faces
+             * already meshed at compatible deflection are skipped by OCCT,
+             * so this is a no-op for the normal pre-tessellated handoff. */
+            BRepMesh_IncrementalMesh mesher(shape, lin_def, Standard_False,
+                                            ang_def, Standard_False);
 
-        const TopoDS_Face& face = *reinterpret_cast<TopoDS_Face*>(face_addr);
-        const gp_Trsf& trsf     = *reinterpret_cast<gp_Trsf*>(trsf_addr);
-
-        meshes[i] = extract_one_face(face, trsf, total_verts);
-
-        if (!meshes[i].failed) {
-            total_verts += meshes[i].n_verts;
-            total_tris  += meshes[i].n_tris;
+            for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+                const TopoDS_Face& face = TopoDS::Face(ex.Current());
+                FaceMesh fm = extract_one_face(face, total_verts);
+                if (!fm.failed) {
+                    total_verts += fm.n_verts;
+                    total_tris  += fm.n_tris;
+                }
+                meshes.push_back(std::move(fm));
+            }
         }
+    } catch (const Standard_Failure& e) {
+        error_msg = std::string("OCCT exception: ") +
+                    (e.GetMessageString() ? e.GetMessageString() : "unknown");
+    } catch (const std::exception& e) {
+        error_msg = std::string("C++ exception: ") + e.what();
     }
+    Py_END_ALLOW_THREADS
+
+    if (!error_msg.empty()) {
+        PyErr_SetString(PyExc_ValueError, error_msg.c_str());
+        return NULL;
+    }
+
+    Py_ssize_t n = static_cast<Py_ssize_t>(meshes.size());
 
     /* Allocate output numpy arrays */
     npy_intp verts_dims[2] = {total_verts, 3};
@@ -266,11 +295,14 @@ static PyObject* py_extract_face_meshes(PyObject* /*self*/, PyObject* args)
 /* Module definition                                                  */
 /* ------------------------------------------------------------------ */
 static PyMethodDef methods[] = {
-    {"extract_face_meshes", py_extract_face_meshes, METH_VARARGS,
-     "Extract triangulation data from OCC faces.\n\n"
+    {"mesh_and_extract", py_mesh_and_extract, METH_VARARGS,
+     "Deserialize a BinTools compound of faces, mesh missing faces and\n"
+     "extract all triangulations.\n\n"
      "Args:\n"
-     "    face_ptrs: list of int — SWIG pointer addresses for TopoDS_Face objects\n"
-     "    tform_ptrs: list of int — SWIG pointer addresses for gp_Trsf objects\n\n"
+     "    brep_bytes: bytes — BinTools-serialized compound (triangulation\n"
+     "        payload included; faces are extracted in compound order)\n"
+     "    lin_def: float — linear deflection for the safety-net meshing\n"
+     "    ang_def: float — angular deflection for the safety-net meshing\n\n"
      "Returns:\n"
      "    Tuple of 10 numpy arrays:\n"
      "    (all_verts, all_norms, all_uvs, all_faces,\n"
