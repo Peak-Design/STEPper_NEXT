@@ -77,6 +77,7 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
         wm.progress_begin(0, len(targets))
         done = 0
         failed = []
+        unwrap_objs = []
         for filepath, objs in by_file.items():
             reader = m._cache_get(filepath)
             if reader is None:
@@ -119,12 +120,32 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
                     lin_def = stored.get("lin_deflection", scene_lin)
                     ang_def = stored.get("ang_deflection", scene_ang)
 
-                # Restore per-import UV options for the apply path
-                m._uv_options["surface"] = stored.get("uv_surface", True)
-                m._uv_options["box"] = stored.get("uv_box", False)
+                # Restore per-import UV options for the apply path.
+                # Older imports stored uv_surface/uv_unwrap/uv_box booleans
+                # instead of uv_mode — map them across.
+                uv_mode = stored.get("uv_mode")
+                if uv_mode is None:
+                    if stored.get("uv_box"):
+                        uv_mode = "BOX"
+                    elif stored.get("uv_unwrap"):
+                        uv_mode = "UNWRAP"
+                    elif stored.get("uv_surface", True):
+                        uv_mode = "SURFACE"
+                    else:
+                        uv_mode = "NONE"
+                m._uv_options["mode"] = uv_mode
+                m._uv_options["surface"] = uv_mode in ("SURFACE", "UNWRAP")
+                m._uv_options["unwrap"] = uv_mode == "UNWRAP"
+                m._uv_options["box"] = uv_mode == "BOX"
+                m._uv_options["normalize"] = stored.get("uv_normalize", True)
+                m._uv_options["split_closed"] = stored.get(
+                    "uv_split_closed", True)
                 m._uv_options["box_scale"] = stored.get("box_uv_scale", 1.0)
                 m._uv_options["unit_scale"] = stored.get(
                     "unit_scale", obj.get("STEP_applied_scale", 0.0) or 1.0)
+                reader.uv_world_scale = (
+                    None if m._uv_options["normalize"]
+                    else m._uv_options["unit_scale"])
 
                 try:
                     mesh, colors, mat_names, norms, uvs = m.precompute_mesh_data(
@@ -147,8 +168,18 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
                     obj["STEP_materials"] = json.dumps(
                         [mt.name if mt else "" for mt in obj.data.materials])
                 obj.display_type = "TEXTURED"
+                if m._uv_options["unwrap"]:
+                    unwrap_objs.append(obj)
                 done += 1
                 wm.progress_update(done)
+
+        if unwrap_objs:
+            # Regenerated meshes are already scaled to scene units, so
+            # real-world UV mode needs no extra unit conversion
+            m._unwrap_uv_objects(
+                unwrap_objs,
+                world_scale=(None if m._uv_options.get("normalize", True)
+                             else 1.0))
 
         wm.progress_end()
 
@@ -381,9 +412,10 @@ class STEPPER_OT_mesh_cleanup(bpy.types.Operator):
 
 
 class STEPPER_OT_add_box_uv(bpy.types.Operator):
-    """Add a triplanar BoxUV layer to the selected meshes"""
+    """Box-project the 'UVMap' layer of the selected meshes (triplanar,
+    world-unit tile size); creates the layer if missing"""
     bl_idname = "stepper.add_box_uv"
-    bl_label = "Add BoxUV to selected"
+    bl_label = "Box Project UVs"
     bl_options = {"REGISTER", "UNDO"}
 
     box_uv_scale: bpy.props.FloatProperty(
@@ -403,7 +435,7 @@ class STEPPER_OT_add_box_uv(bpy.types.Operator):
             # Meshes carry baked (world-ish) coordinates post-import
             if uv_mod.add_box_uv(obj.data, scale=self.box_uv_scale):
                 n += 1
-        self.report({"INFO"}, f"BoxUV added to {n} mesh(es)")
+        self.report({"INFO"}, f"Box-projected UVMap on {n} mesh(es)")
         return {"FINISHED"}
 
 

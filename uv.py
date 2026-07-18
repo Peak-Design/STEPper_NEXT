@@ -1,9 +1,10 @@
 # UV layer helpers for STEPper NEXT.
 #
-# SurfaceUV: the CAD parametric (per-face-normalized) UVs extracted during
-# tessellation are written by the mesh apply paths in main.py; this module
-# provides the shared writer plus the BoxUV (triplanar) generator that works
-# on any finished Blender mesh.
+# All import modes write a single "UVMap" layer (Blender's default name):
+# the CAD parametric UVs extracted during tessellation are written by the
+# mesh apply paths in main.py; this module provides the shared writer plus
+# the triplanar box-projection generator that works on any finished
+# Blender mesh.
 
 import numpy as np
 
@@ -26,7 +27,7 @@ def write_uv_layer(me, name, loop_uvs):
     return True
 
 
-def add_box_uv(me, scale=1.0, name="BoxUV"):
+def add_box_uv(me, scale=1.0, name="UVMap"):
     """Add a triplanar box-projected UV layer to a finished Blender mesh.
 
     Each face is projected along its dominant normal axis; UVs are the two

@@ -45,7 +45,10 @@ from . import background as background_mod
 from .formats import classes as formats_classes
 
 # Active UV options for the current import (set by load_step)
-_uv_options = {"surface": True, "box": False, "box_scale": 1.0}
+# Per-import UV generation state (a single "UVMap" layer; the booleans are
+# derived from the operator's uv_mode enum in load_step)
+_uv_options = {"surface": True, "unwrap": False, "box": False,
+               "box_scale": 1.0}
 
 # LRU file cache with max entry limit
 MAX_FILE_CACHE = 10
@@ -176,9 +179,9 @@ def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names
         if color_layer is None:
             color_layer = bm.loops.layers.color.new(vcol_name)
         if write_uvs:
-            uv_layer = bm.loops.layers.uv.get("SurfaceUV")
+            uv_layer = bm.loops.layers.uv.get("UVMap")
             if uv_layer is None:
-                uv_layer = bm.loops.layers.uv.new("SurfaceUV")
+                uv_layer = bm.loops.layers.uv.new("UVMap")
         i = 0
         for face in bm.faces:
             mat_col = (0.5, 0.5, 0.5)
@@ -393,11 +396,32 @@ def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True)
                         mesh.update()
                 processed_meshes.add(mesh)
 
+        # Reset scale to 1 on EVERY object, hierarchy empties included (the
+        # scale now lives in the mesh data). Snapshot the target world
+        # matrices first and assign parents-before-children through
+        # matrix_basis — resetting only the meshes would leave a 0.001-scaled
+        # top empty with 1000-scaled children (world-correct, locally wrong),
+        # and naive matrix_world writes mid-loop read stale parent state.
+        one = Vector((1.0, 1.0, 1.0))
+        desired = {}
         for obj in chosen_objects:
-            if obj.data is None:
-                continue
             loc, rot, _ = obj.matrix_world.decompose()
-            obj.matrix_world = Matrix.LocRotScale(loc, rot, Vector((1.0, 1.0, 1.0)))
+            desired[obj] = Matrix.LocRotScale(loc, rot, one)
+
+        def _depth(o):
+            d = 0
+            while o.parent is not None:
+                d += 1
+                o = o.parent
+            return d
+
+        for obj in sorted(chosen_objects, key=_depth):
+            parent = obj.parent
+            if parent is not None and parent in desired:
+                obj.matrix_parent_inverse = Matrix.Identity(4)
+                obj.matrix_basis = desired[parent].inverted() @ desired[obj]
+            else:
+                obj.matrix_basis = desired[obj]
 
 
 # Debug timing flag — set from addon settings at import start
@@ -500,15 +524,115 @@ def apply_mesh_to_blender(obj, mesh, colors, mat_names, norms, uvs,
 
 
 def _apply_uv_layers(me, uvs):
-    """Write SurfaceUV / BoxUV layers per the active import UV options."""
+    """Write the single 'UVMap' layer per the active import UV options."""
     if _uv_options.get("surface", True) and uvs is not None and len(uvs) > 0:
-        uv_mod.write_uv_layer(me, "SurfaceUV", uvs)
+        uv_mod.write_uv_layer(me, "UVMap", uvs)
     if _uv_options.get("box", False):
         # Mesh verts are still in file units here (scale is baked later),
         # so convert the world-unit tile size into file units.
         unit_scale = _uv_options.get("unit_scale", 1.0) or 1.0
         uv_mod.add_box_uv(
             me, scale=_uv_options.get("box_scale", 1.0) / unit_scale)
+
+
+def _unwrap_uv_objects(objs, world_scale=None):
+    """Angle-based unwrap with packed islands into the 'UVMap' layer.
+
+    Runs Blender's unwrap operator once over all given objects in
+    multi-object edit mode. The imported seams (marked at sharp normal
+    discontinuities between CAD faces) define the islands; the unwrap
+    operator packs them into the 0-1 square per mesh.
+
+    world_scale: None keeps the packed 0-1 layout (Normalize UVs on).
+    Otherwise the packed islands are uniformly rescaled so 1 UV unit
+    matches 1 scene unit as closely as possible (median of the per-triangle
+    3D/UV area ratios); the value is the mesh-unit -> scene-unit factor
+    (file-unit meshes at import time, 1.0 for already-scaled meshes).
+    """
+    targets = []
+    seen = set()
+    for o in objs:
+        if (o is not None and getattr(o, "type", None) == "MESH"
+                and o.data is not None and len(o.data.polygons) > 0
+                and o.data not in seen):
+            seen.add(o.data)
+            # The surface-UV pass usually created the layer already (its
+            # content doubles as a fallback if the unwrap operator fails)
+            layer = o.data.uv_layers.get("UVMap")
+            if layer is None:
+                layer = o.data.uv_layers.new(name="UVMap", do_init=False)
+            if layer is None:  # Blender's 8-UV-layer limit
+                continue
+            o.data.uv_layers.active = layer
+            targets.append(o)
+    if not targets:
+        return
+    view_layer = bpy.context.view_layer
+    try:
+        for o in view_layer.objects:
+            try:
+                o.select_set(False)
+            except RuntimeError:
+                pass
+        for o in targets:
+            o.select_set(True)
+        view_layer.objects.active = targets[0]
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.unwrap(method="ANGLE_BASED", margin=0.005)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        if world_scale is not None:
+            for o in targets:
+                _scale_unwrap_to_world(o.data, world_scale)
+        print(f"UVMap unwrap: {len(targets)} mesh(es)"
+              + ("" if world_scale is None else " (real-world scale)"))
+    except Exception as e:
+        print(f"UVMap unwrap failed: {e}")
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:
+            pass
+
+
+def _scale_unwrap_to_world(me, world_scale):
+    """Rescale the packed unwrapped 'UVMap' so 1 UV unit ~= 1 scene unit.
+
+    The unwrap is near-isometric per island, so a single uniform factor —
+    the median of per-triangle sqrt(3D area / UV area) — restores physical
+    scale while keeping the packed island arrangement.
+    """
+    layer = me.uv_layers.get("UVMap")
+    n_loops = len(me.loops)
+    if layer is None or n_loops == 0:
+        return
+    uv = np.empty(n_loops * 2, dtype=np.float32)
+    layer.uv.foreach_get("vector", uv)
+    uv = uv.reshape(-1, 2)
+
+    starts = np.empty(len(me.polygons), dtype=np.int32)
+    me.polygons.foreach_get("loop_start", starts)
+    a, b, c = uv[starts], uv[starts + 1], uv[starts + 2]
+    uv_area = 0.5 * np.abs((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
+                           - (c[:, 0] - a[:, 0]) * (b[:, 1] - a[:, 1]))
+
+    verts = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", verts)
+    verts = verts.reshape(-1, 3)
+    li = np.empty(n_loops, dtype=np.int32)
+    me.loops.foreach_get("vertex_index", li)
+    p = verts[li[starts]]
+    q = verts[li[starts + 1]]
+    r = verts[li[starts + 2]]
+    area3d = 0.5 * np.linalg.norm(np.cross(q - p, r - p), axis=1)
+
+    valid = (uv_area > 1e-14) & (area3d > 1e-14)
+    if not np.any(valid):
+        return
+    factor = float(np.median(np.sqrt(area3d[valid] / uv_area[valid])))
+    factor *= world_scale  # mesh units -> scene units
+    if factor <= 0.0:
+        return
+    layer.uv.foreach_set("vector", (uv * factor).ravel())
 
 
 def _apply_native_mesh(obj, mesh, colors, mat_names, norms, uvs,
@@ -730,6 +854,78 @@ def _compute_edge_attributes(mesh):
     discontinuous = cross_batch & sharp_ev0 & sharp_ev1
     sharp_keys = int_edge_keys[discontinuous]
     seam_keys = sharp_keys  # seams only where normals actually split
+
+    # --- Parametric closure seams (closed cylinders/cones/tori/splines) ---
+    # A closed face has NO sharp edge along its parametric seam, so unwrap
+    # has nowhere to cut and produces a degenerate result. Detection: OCC
+    # duplicates the seam vertices in parameter space (u=0 and u=period);
+    # the position-based vertex fuse welds them, but the per-corner UV
+    # snapshot still disagrees across the edge. So an interior edge WITHIN
+    # one OCC face whose corner UVs differ at BOTH endpoints lies on the
+    # closure (the both-endpoints rule keeps collapsed poles — where every
+    # touching edge has one discontinuous corner — out of the seam set).
+    # Marked as UV seam only, never sharp: shading stays smooth.
+    if _uv_options.get("split_closed", True):
+        loop_uvs = None
+        get_uvs = getattr(mesh, "get_loop_uvs", None)
+        if get_uvs is not None:
+            loop_uvs = get_uvs()
+        if loop_uvs is not None and len(loop_uvs) == T * 3:
+            same_batch = ~cross_batch
+            jump0 = (np.abs(loop_uvs[n0_ev0_c] - loop_uvs[n1_ev0_c]).sum(axis=1)
+                     > 1e-5)
+            jump1 = (np.abs(loop_uvs[n0_ev1_c] - loop_uvs[n1_ev1_c]).sum(axis=1)
+                     > 1e-5)
+            closure_keys = int_edge_keys[same_batch & jump0 & jump1]
+            if len(closure_keys):
+                seam_keys = np.unique(
+                    np.concatenate([seam_keys, closure_keys]))
+
+        # Multi-face closed regions: a hole modeled as two half-cylinders
+        # has no closed face, but the smooth-joined pair still forms a
+        # closed tube that unwrap cannot flatten. Find smooth-connected
+        # triangle regions that are not topological disks (Euler
+        # characteristic V - E + F != 1: tubes, rings, sphere halves) and
+        # seam their internal CAD-face boundaries, splitting them into
+        # flattenable patches. UV seam only — shading is untouched.
+        smooth_pair = ~np.isin(int_edge_keys, seam_keys)
+        a = face_of[he0][smooth_pair]
+        b = face_of[he1][smooth_pair]
+        if len(a):
+            # Connected components via label propagation + pointer jumping
+            labels = np.arange(T, dtype=np.int64)
+            while True:
+                prev = labels
+                m = np.minimum(labels[a], labels[b])
+                labels = labels.copy()
+                np.minimum.at(labels, a, m)
+                np.minimum.at(labels, b, m)
+                labels = labels[labels]
+                if np.array_equal(labels, prev):
+                    break
+            # Per-component V, E, F (edge ids from the earlier unique():
+            # packing with small index domains cannot overflow int64)
+            n_unique_edges = np.int64(len(unique_keys))
+            comp_of_he = labels[face_of]
+            cv = np.unique(np.repeat(labels, 3) * np.int64(max_v)
+                           + faces.ravel().astype(np.int64))
+            v_ids, v_counts = np.unique(cv // np.int64(max_v),
+                                        return_counts=True)
+            ce = np.unique(comp_of_he * n_unique_edges + inverse)
+            e_ids, e_counts = np.unique(ce // n_unique_edges,
+                                        return_counts=True)
+            f_ids, f_counts = np.unique(labels, return_counts=True)
+            # v_ids/e_ids/f_ids are identical sorted component id sets
+            chi = (v_counts.astype(np.int64) - e_counts.astype(np.int64)
+                   + f_counts.astype(np.int64))
+            bad_ids = v_ids[chi != 1]
+            if len(bad_ids):
+                cand = smooth_pair & cross_batch
+                edge_comp = labels[face_of[he0]]
+                extra = int_edge_keys[cand & np.isin(edge_comp, bad_ids)]
+                if len(extra):
+                    seam_keys = np.unique(
+                        np.concatenate([seam_keys, extra]))
 
     return sharp_keys, seam_keys, max_v
 
@@ -1191,8 +1387,9 @@ def load_step(
     material_database="NONE",
     deflection_spec=None,
     skip_construction=False,
-    uv_surface=True,
-    uv_box=False,
+    uv_mode="SURFACE",
+    uv_normalize=True,
+    uv_split_closed=True,
     box_uv_scale=1.0,
     import_curves=False,
 ):
@@ -1201,8 +1398,14 @@ def load_step(
     global _debug_timing
     _debug_timing = _get_addon_prefs().debug_timing
 
-    _uv_options["surface"] = uv_surface
-    _uv_options["box"] = uv_box
+    # One "UVMap" layer; its content is chosen by uv_mode. UNWRAP writes
+    # the surface UVs first (fallback content) and unwraps in place.
+    _uv_options["mode"] = uv_mode
+    _uv_options["surface"] = uv_mode in ("SURFACE", "UNWRAP")
+    _uv_options["unwrap"] = uv_mode == "UNWRAP"
+    _uv_options["box"] = uv_mode == "BOX"
+    _uv_options["normalize"] = uv_normalize
+    _uv_options["split_closed"] = uv_split_closed
     _uv_options["box_scale"] = box_uv_scale
 
     (hierarchy_flat, hierarchy_tree, hierarchy_empties,
@@ -1260,6 +1463,10 @@ def load_step(
     # BoxUV tile size is specified in world units; meshes are built in file
     # units, so the apply path needs the conversion factor.
     _uv_options["unit_scale"] = scale
+
+    # SurfaceUV mode for this import: 0-1 normalized (default) or scaled to
+    # real-world scene units for consistent texel density across parts.
+    step_reader.uv_world_scale = None if uv_normalize else scale
 
     wm = bpy.context.window_manager
 
@@ -1510,8 +1717,9 @@ def load_step(
             obj["STEP_import_settings"] = json.dumps({
                 "lin_deflection": lin_deflection,
                 "ang_deflection": ang_deflection,
-                "uv_surface": _uv_options["surface"],
-                "uv_box": _uv_options["box"],
+                "uv_mode": _uv_options["mode"],
+                "uv_normalize": _uv_options["normalize"],
+                "uv_split_closed": _uv_options["split_closed"],
                 "box_uv_scale": _uv_options["box_scale"],
                 "unit_scale": scale,
             })
@@ -1524,6 +1732,15 @@ def load_step(
     if _debug_timing:
         _print_phase2_times()
     print("\n" + repr(step_reader.import_problems))
+
+    # Optional packed angle-based unwrap (unique meshes only — linked
+    # copies share the datablock and get it for free). Meshes are still in
+    # file units here, so real-world mode converts through unit_scale.
+    if _uv_options.get("unwrap"):
+        _unwrap_uv_objects(
+            created_names.values(),
+            world_scale=(None if _uv_options.get("normalize", True)
+                         else _uv_options["unit_scale"]))
 
     # remove all temporary links
     for tobj in created_objs:
@@ -1669,9 +1886,9 @@ def load_step(
     transform_to_up(up_as[0], created_objs, scale, apply_scale=apply_scale)
 
     if hierarchy_instances and apply_scale and scale != 1.0:
-        # Instance empties carry the scene scale in their matrices after
-        # transform_to_up; bake it into the prototype meshes instead and
-        # reset the empties, matching apply_scale semantics.
+        # transform_to_up reset every object's scale to 1 (prototypes are
+        # not in created_objs), so bake the scene scale into the prototype
+        # meshes to match apply_scale semantics.
         processed_meshes = set()
         for proto in instance_prototypes.values():
             me = proto.data
@@ -1684,9 +1901,6 @@ def load_step(
                     me.vertices.foreach_set("co", verts)
                     me.update()
                 processed_meshes.add(me)
-        for obj in created_objs:
-            loc, rot, _ = obj.matrix_world.decompose()
-            obj.matrix_world = Matrix.LocRotScale(loc, rot, Vector((1.0, 1.0, 1.0)))
 
     wm.progress_end()
     elapsed = time.time() - start_time
@@ -1798,8 +2012,11 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
     # never inherit a previous invocation's file list (a stale `files` entry
     # made drag & drop re-import the previously imported file).
     filepath: StringProperty(subtype="FILE_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    # OperatorFileListElement (not a plain PropertyGroup): required for the
+    # FileHandler to populate multiple dropped files into the operator
     files: bpy.props.CollectionProperty(
-        type=bpy.types.PropertyGroup, options={"HIDDEN", "SKIP_SAVE"})
+        type=bpy.types.OperatorFileListElement,
+        options={"HIDDEN", "SKIP_SAVE"})
     directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
     override_file: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
 
@@ -1939,23 +2156,46 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
         default=False,
     )
 
-    uv_surface: bpy.props.BoolProperty(
-        name="Surface UVs",
-        description="Create a 'SurfaceUV' layer from the CAD parametric "
-                    "surface coordinates (one normalized island per CAD face)",
+    uv_mode: bpy.props.EnumProperty(
+        items=[
+            ("NONE", "None", "Do not create a UV map", 0),
+            ("SURFACE", "CAD Surface",
+             "One island per CAD face from the parametric surface "
+             "coordinates (fast)", 1),
+            ("UNWRAP", "Unwrap",
+             "Blender's angle-based unwrap with packed islands; sharp CAD "
+             "edges act as seams. Slower on large assemblies", 2),
+            ("BOX", "Box Project",
+             "Triplanar box projection with a world-unit tile size", 3),
+        ],
+        name="UV Map",
+        description="How the imported 'UVMap' layer is generated",
+        default="SURFACE",
+    )
+
+    uv_normalize: bpy.props.BoolProperty(
+        name="Normalize UVs",
+        description="Fit UVs to the 0-1 square (per CAD face in Surface "
+                    "mode, packed per mesh in Unwrap mode). Disable to "
+                    "scale UVs to real-world scene units instead — packed "
+                    "islands are kept and uniformly rescaled — so a shared "
+                    "material shows textures at the same physical scale on "
+                    "every part",
         default=True,
     )
 
-    uv_box: bpy.props.BoolProperty(
-        name="Box UVs",
-        description="Create an additional 'BoxUV' layer using triplanar box "
-                    "projection in world units",
-        default=False,
+    uv_split_closed: bpy.props.BoolProperty(
+        name="Split Closed Faces",
+        description="Mark a UV seam along the parametric closure of "
+                    "cylindrical and other closed surfaces so unwrapping "
+                    "can flatten them (CAD data has no seam there). Does "
+                    "not affect shading",
+        default=True,
     )
 
     box_uv_scale: bpy.props.FloatProperty(
         name="Box UV size",
-        description="World size of one UV tile for the BoxUV layer",
+        description="World size of one UV tile for the Box Project mode",
         unit="LENGTH",
         default=1.0,
         min=0.0001,
@@ -2017,8 +2257,9 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
             "material_database": self.material_database,
             "detail_level": self.detail_level,
             "skip_construction": self.skip_construction,
-            "uv_surface": self.uv_surface,
-            "uv_box": self.uv_box,
+            "uv_mode": self.uv_mode,
+            "uv_normalize": self.uv_normalize,
+            "uv_split_closed": self.uv_split_closed,
             "box_uv_scale": self.box_uv_scale,
             "import_curves": self.import_curves,
             "tessellation_relative": self.tessellation_relative,
@@ -2081,8 +2322,9 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
                 apply_scale=self.apply_scale,
                 material_database=self.material_database,
                 skip_construction=self.skip_construction,
-                uv_surface=self.uv_surface,
-                uv_box=self.uv_box,
+                uv_mode=self.uv_mode,
+                uv_normalize=self.uv_normalize,
+                uv_split_closed=self.uv_split_closed,
                 box_uv_scale=self.box_uv_scale,
                 import_curves=self.import_curves,
             )
@@ -2700,7 +2942,7 @@ class STEP_PT_STEPper(bpy.types.Panel):
         row = col.row(align=True)
         row.operator("stepper.mesh_cleanup", text="Clean Up Meshes",
                      icon='MESH_DATA')
-        row.operator("stepper.add_box_uv", text="Add BoxUV", icon='UV')
+        row.operator("stepper.add_box_uv", text="Box Project UVs", icon='UV')
 
 
 class STEP_PT_STEPper_Reload(bpy.types.Panel):

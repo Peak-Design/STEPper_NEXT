@@ -49,13 +49,27 @@
 #     longer abort the import; per-label surface color no longer overridden
 #     by curve color; edit-mode guards on all mesh tools; cursor-percentage
 #     and tooltip/layout polish throughout; CI fail-fast hardening
+#   - v2.4.5: parented-empties imports now leave every object (empties
+#     included) at scale 1 with the scale baked into meshes; UV generation
+#     unified into a single "UVMap" layer with a mode dropdown (None / CAD
+#     Surface / Unwrap / Box Project); "Normalize UVs" toggle (off = UVs
+#     scaled to real-world units — unwrap islands stay packed and are
+#     uniformly rescaled so 1 UV unit ~= 1 scene unit — for consistent
+#     texel density across parts); Unwrap mode = packed angle-based unwrap
+#     with CAD sharp edges as seams, also honored by Regenerate; recursive
+#     folder batch import; multi-file
+#     drag & drop fixed (files list now uses OperatorFileListElement);
+#     "Split Closed Faces" (on by default): UV seams added along the
+#     parametric closure of cylinders/cones/tori AND across smooth-joined
+#     face groups forming closed tubes/rings (Euler-characteristic test),
+#     so unwrapping flattens them cleanly — shading unaffected
 
 bl_info = {
     "name": "STEPper NEXT",
     "author": "ambi, Peak-Design",
     "description": "STEP OpenCASCADE import",
     "blender": (5, 1, 0),
-    "version": (2, 4, 4),
+    "version": (2, 4, 5),
     "location": "3D View > Tools panel > STEPper NEXT",
     "category": "Import",
 }

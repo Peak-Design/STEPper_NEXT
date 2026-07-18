@@ -143,11 +143,14 @@ def draw_import_dialog(op, layout, prefs):
     header.label(text="Materials & UVs")
     if body:
         body.prop(op, "material_database", text="Material DB")
-        body.prop(op, "uv_surface")
-        body.prop(op, "uv_box")
+        body.prop(op, "uv_mode")
         sub = body.row()
-        sub.active = op.uv_box
+        sub.active = op.uv_mode in {"SURFACE", "UNWRAP"}
+        sub.prop(op, "uv_normalize")
+        sub = body.row()
+        sub.active = op.uv_mode == "BOX"
         sub.prop(op, "box_uv_scale")
+        body.prop(op, "uv_split_closed")
 
     header, body = layout.panel("stepper_advanced", default_closed=True)
     header.label(text="Advanced")
@@ -178,6 +181,11 @@ class STEPPER_OT_batch_import_folder(bpy.types.Operator):
     directory: bpy.props.StringProperty(subtype="DIR_PATH")
     filter_glob: bpy.props.StringProperty(
         default="*.step;*.stp;*.st;*.iges;*.igs;*.brep;*.brp", options={"HIDDEN"})
+    recursive: bpy.props.BoolProperty(
+        name="Recursive",
+        description="Also search all subfolders for CAD files",
+        default=False,
+    )
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -185,15 +193,22 @@ class STEPPER_OT_batch_import_folder(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            # os.listdir instead of glob: folder names with glob
-            # metacharacters ("Parts [rev2]") must not be treated as patterns
-            names = os.listdir(self.directory)
+            if self.recursive:
+                found = []
+                for root, _dirs, names in os.walk(self.directory):
+                    found.extend(os.path.join(root, n) for n in names
+                                 if n.lower().endswith(STEP_EXTENSIONS))
+            else:
+                # os.listdir instead of glob: folder names with glob
+                # metacharacters ("Parts [rev2]") must not be treated as
+                # patterns
+                found = [os.path.join(self.directory, n)
+                         for n in os.listdir(self.directory)
+                         if n.lower().endswith(STEP_EXTENSIONS)]
         except OSError as e:
             self.report({"ERROR"}, f"Cannot read folder: {e}")
             return {"CANCELLED"}
-        files = sorted(
-            os.path.join(self.directory, n) for n in names
-            if n.lower().endswith(STEP_EXTENSIONS))
+        files = sorted(found)
         if not files:
             self.report({"WARNING"}, "No STEP files found in the folder")
             return {"CANCELLED"}

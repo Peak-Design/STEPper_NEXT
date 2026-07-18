@@ -505,6 +505,12 @@ class ShapeTree:
 
 
 class ReadSTEP:
+    # Per-import UV mode, set by load_step before tessellation:
+    # None  -> normalize each face's UVs to the 0-1 square (default)
+    # float -> scale UVs so 1 UV unit == 1 scene unit (value = scene units
+    #          per file unit); texel density then matches across parts
+    uv_world_scale = None
+
     def __init__(self, filename, skip_name_prefixes=()):
         # Construction-geometry filter: case-insensitive node-name prefixes
         # to skip during the assembly walk (e.g. "Sketches", "Axes").
@@ -996,11 +1002,20 @@ class ReadSTEP:
                 undef_normals = True
             norms[t - 1] = nn
 
-        # Normalize UVs to a 0-1 box, preserving aspect ratio (matches the
-        # native path's per-face normalization)
+        # Normalize UVs, preserving aspect ratio (matches the native path's
+        # per-face normalization, including real-world mode — see
+        # _recompute_face_normals)
         if has_uvs:
             span = max(Umax - Umin, Vmax - Vmin)
-            s = 1.0 / span if span > 1e-12 else 1.0
+            if span > 1e-12:
+                if self.uv_world_scale is not None:
+                    va = np.asarray(verts, dtype=np.float32)
+                    ext = float((va.max(axis=0) - va.min(axis=0)).max())
+                    s = (ext * self.uv_world_scale) / span
+                else:
+                    s = 1.0 / span
+            else:
+                s = 1.0
             uvs = [((u - Umin) * s, (v - Vmin) * s) for (u, v) in uvs]
 
         # Read all triangles
@@ -1593,13 +1608,24 @@ class ReadSTEP:
                 norms_out = -norms_out
             all_norms[vs:vs + vc] = norms_out
 
-            # Normalize this face's UVs to a 0-1 box, preserving aspect ratio
-            # (raw OCC parameter space has arbitrary per-face scaling).  Done
-            # after the raw values were used for SetParameters above.
+            # Normalize this face's UVs, preserving aspect ratio (raw OCC
+            # parameter space has arbitrary per-face scaling).  Done after
+            # the raw values were used for SetParameters above.
+            # Default: fit to a 0-1 box.  World mode (uv_world_scale set):
+            # scale so 1 UV unit == 1 scene unit, using the face's 3D extent
+            # as the reference — texel density then matches across parts.
             u_min = float(u_vals.min())
             v_min = float(v_vals.min())
             span = max(float(u_vals.max()) - u_min, float(v_vals.max()) - v_min)
-            s = 1.0 / span if span > 1e-12 else 1.0
+            if span > 1e-12:
+                if self.uv_world_scale is not None:
+                    fv = all_verts[vs:vs + vc]
+                    ext = float((fv.max(axis=0) - fv.min(axis=0)).max())
+                    s = (ext * self.uv_world_scale) / span
+                else:
+                    s = 1.0 / span
+            else:
+                s = 1.0
             all_uvs[vs:vs + vc, 0] = (u_vals - u_min) * s
             all_uvs[vs:vs + vc, 1] = (v_vals - v_min) * s
 
