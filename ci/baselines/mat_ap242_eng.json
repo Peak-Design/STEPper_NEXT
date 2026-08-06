@@ -1,0 +1,239 @@
+{
+ "collections": {
+  "children": [
+   {
+    "children": [],
+    "name": "Collection",
+    "objects": [
+     "Camera",
+     "Cube",
+     "Light"
+    ]
+   }
+  ],
+  "name": "Scene Collection",
+  "objects": [
+   "SOLID",
+   "SOLID.001",
+   "mat_ap242.empties"
+  ]
+ },
+ "file": "C:/Users/Oscar/AppData/Local/Temp/claude/c--Users-Oscar-AppData-Roaming-Blender-Foundation-Blender-5-1-scripts-addons-STEPper-NEXT/547a3076-2f68-4638-b4b2-319c545342d5/scratchpad/mat_ap242.step",
+ "import_seconds": 0.066,
+ "num_objects": 6,
+ "objects": [
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    0.685921,
+    -0.324013,
+    0.651558,
+    7.358891,
+    0.727676,
+    0.305421,
+    -0.61417,
+    -6.925791,
+    0.0,
+    0.895396,
+    0.445271,
+    4.958309,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Camera",
+   "parent": null,
+   "type": "CAMERA"
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "loops": 24,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "Material"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Cube",
+   "parent": null,
+   "polys": 6,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 8
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    -0.290865,
+    -0.771101,
+    0.566393,
+    4.076245,
+    0.955171,
+    -0.199883,
+    0.218391,
+    1.005454,
+    -0.055189,
+    0.604525,
+    0.794672,
+    5.903862,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Light",
+   "parent": null,
+   "type": "LIGHT"
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "loops": 36,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "Aluminium 6061-T6"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "SOLID",
+   "parent": "mat_ap242.empties",
+   "polys": 12,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 8
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "loops": 180,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "AISI 304 Steel"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "SOLID.001",
+   "parent": "mat_ap242.empties",
+   "polys": 60,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 32
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "mat_ap242.empties",
+   "parent": null,
+   "type": "EMPTY"
+  }
+ ],
+ "operator_kwargs": {
+  "eng_materials": true
+ },
+ "operator_result": [
+  "FINISHED"
+ ]
+}

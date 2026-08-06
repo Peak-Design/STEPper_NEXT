@@ -535,6 +535,37 @@ def _apply_uv_layers(me, uvs):
             me, scale=_uv_options.get("box_scale", 1.0) / unit_scale)
 
 
+def _assign_engineering_material(obj, mat_info):
+    """Replace the object's material slots with ONE Blender material named
+    after the CAD engineering material (e.g. "AISI 304 Steel").
+
+    The part's imported color is kept as the material's base color when the
+    material is first created; density/description are stored as custom
+    properties on the material. Slots live on the mesh datablock, so linked
+    copies pick this up automatically.
+    """
+    me = obj.data
+    if me is None or not mat_info or not mat_info.get("name"):
+        return
+    name = mat_info["name"][:60]
+    mat = bpy.data.materials.get(name)
+    if mat is None:
+        color = (0.8, 0.8, 0.8)
+        if len(me.materials) and me.materials[0] is not None:
+            color = tuple(me.materials[0].diffuse_color[:3])
+        mat = add_material(name, color)
+    if mat_info.get("density"):
+        mat["STEP_density"] = float(mat_info["density"])
+    if mat_info.get("description"):
+        mat["STEP_description"] = mat_info["description"]
+    me.materials.clear()
+    me.materials.append(mat)
+    n_polys = len(me.polygons)
+    if n_polys:
+        me.polygons.foreach_set(
+            "material_index", np.zeros(n_polys, dtype=np.int32))
+
+
 def _unwrap_uv_objects(objs, world_scale=None):
     """Angle-based unwrap with packed islands into the 'UVMap' layer.
 
@@ -1392,6 +1423,7 @@ def load_step(
     uv_split_closed=True,
     box_uv_scale=1.0,
     import_curves=False,
+    eng_materials=False,
 ):
     from . import importer
 
@@ -1649,6 +1681,11 @@ def load_step(
 
                 if obj is not None:
                     created_names[shape_name] = obj
+                    # One Blender material per part, named after the CAD
+                    # engineering material (AP242/AP214 metadata), if present
+                    if eng_materials:
+                        _assign_engineering_material(
+                            obj, getattr(node, "material", None))
                     if hierarchy_instances:
                         # First occurrence: keep the mesh object as a hidden
                         # prototype; this occurrence becomes an instance empty.
@@ -1722,7 +1759,17 @@ def load_step(
                 "uv_split_closed": _uv_options["split_closed"],
                 "box_uv_scale": _uv_options["box_scale"],
                 "unit_scale": scale,
+                "eng_materials": eng_materials,
             })
+            # Engineering material metadata (AP242/AP214) as custom
+            # properties, regardless of the assignment option
+            mat_info = getattr(node, "material", None)
+            if mat_info and mat_info.get("name"):
+                obj["STEP_material"] = mat_info["name"]
+                if mat_info.get("description"):
+                    obj["STEP_material_desc"] = mat_info["description"]
+                if mat_info.get("density"):
+                    obj["STEP_material_density"] = float(mat_info["density"])
             # Store original STEP material names for material database feature
             if obj.data is not None and hasattr(obj.data, 'materials') and obj.data.materials:
                 obj["STEP_materials"] = json.dumps([m.name if m else "" for m in obj.data.materials])
@@ -2181,6 +2228,19 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
                     "islands are kept and uniformly rescaled — so a shared "
                     "material shows textures at the same physical scale on "
                     "every part",
+        default=False,
+    )
+
+    eng_materials: bpy.props.BoolProperty(
+        name="Engineering Materials",
+        description="When the STEP file carries engineering material "
+                    "metadata (AP242/AP214 — e.g. exported from CATIA or "
+                    "NX; SOLIDWORKS does not export it), assign each part "
+                    "ONE Blender material named after it (\"AISI 304 "
+                    "Steel\") instead of color-based materials. Density and "
+                    "description are stored as custom properties; pairs "
+                    "well with the Material Database for mapping to full "
+                    "shaders",
         default=True,
     )
 
@@ -2261,6 +2321,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
             "uv_normalize": self.uv_normalize,
             "uv_split_closed": self.uv_split_closed,
             "box_uv_scale": self.box_uv_scale,
+            "eng_materials": self.eng_materials,
             "import_curves": self.import_curves,
             "tessellation_relative": self.tessellation_relative,
             "lin_deflection_rel": self.lin_deflection_rel,
@@ -2288,6 +2349,12 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
         if not import_files:
             self.report({"ERROR"}, "No file selected")
             return {"CANCELLED"}
+
+        # Remember the dialog options for the next session. Reload/Rebuild
+        # and the background worker call this operator with override_file
+        # set — those must not overwrite the user's dialog choices.
+        if self.override_file == "":
+            import_ui.save_last_used(self, _get_addon_prefs())
 
         # Route large imports through the background worker (UI stays
         # responsive). Headless sessions and reload/rebuild paths stay sync.
@@ -2327,6 +2394,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
                 uv_split_closed=self.uv_split_closed,
                 box_uv_scale=self.box_uv_scale,
                 import_curves=self.import_curves,
+                eng_materials=self.eng_materials,
             )
             if result is False:
                 self.report({"ERROR"}, "STEP file could not be opened. Possibly damaged file.")
@@ -3070,6 +3138,23 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         description="Active material database for import",
     )
 
+    remember_import_settings: bpy.props.BoolProperty(
+        name="Remember import settings",
+        description="Save the import dialog options after every import and "
+                    "restore them in the next Blender session (needs "
+                    "'Save Preferences on Quit' or a manual preferences "
+                    "save). When disabled, the dialog starts from the "
+                    "defaults below instead",
+        default=True,
+    )
+
+    last_import_settings: bpy.props.StringProperty(
+        name="Last import settings",
+        description="Last-used import dialog options (managed automatically)",
+        default="",
+        options={"HIDDEN"},
+    )
+
     preferred_up_axis: bpy.props.EnumProperty(
         items=[("XPOS", "X", "", 0), ("YPOS", "Y", "", 2), ("ZPOS", "Z", "", 4)],
         name="Default up axis",
@@ -3170,9 +3255,13 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
 
         col = layout.box().column(align=True)
         col.label(text="Import dialog defaults:")
-        col.prop(self, "preferred_up_axis")
-        col.prop(self, "preferred_hierarchy")
-        col.prop(self, "default_quality_preset")
+        col.prop(self, "remember_import_settings")
+        sub = col.column(align=True)
+        # Last-used settings override these three, so grey them out
+        sub.active = not self.remember_import_settings
+        sub.prop(self, "preferred_up_axis")
+        sub.prop(self, "preferred_hierarchy")
+        sub.prop(self, "default_quality_preset")
         col.prop(self, "construction_filter_names")
 
         col = layout.box().column(align=True)

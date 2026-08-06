@@ -56,13 +56,21 @@
 #     scaled to real-world units — unwrap islands stay packed and are
 #     uniformly rescaled so 1 UV unit ~= 1 scene unit — for consistent
 #     texel density across parts); Unwrap mode = packed angle-based unwrap
-#     with CAD sharp edges as seams, also honored by Regenerate; recursive
-#     folder batch import; multi-file
-#     drag & drop fixed (files list now uses OperatorFileListElement);
-#     "Split Closed Faces" (on by default): UV seams added along the
-#     parametric closure of cylinders/cones/tori AND across smooth-joined
-#     face groups forming closed tubes/rings (Euler-characteristic test),
-#     so unwrapping flattens them cleanly — shading unaffected
+#     with CAD sharp edges as seams, also honored by Regenerate;
+#     engineering material metadata (AP242/AP214 — name/description/density,
+#     e.g. from CATIA/NX material assignments) imported as STEP_material*
+#     custom properties on every object, plus an "Engineering Materials"
+#     option (on by default) assigning one Blender material per part named
+#     after the CAD material (feeds the Material Database); "Split Closed
+#     Faces" (on by default): UV seams added along the parametric closure
+#     of cylinders/cones/tori AND across smooth-joined face groups forming
+#     closed tubes/rings (Euler-characteristic test), so unwrapping
+#     flattens them cleanly — shading unaffected; import dialog options are
+#     remembered across Blender sessions ("Remember import settings"
+#     preference, on by default; folder batch import follows them too);
+#     Normalize UVs now defaults to off (real-world UV scale); recursive
+#     folder batch import; multi-file drag & drop fixed (files list now
+#     uses OperatorFileListElement)
 
 bl_info = {
     "name": "STEPper NEXT",

@@ -1,0 +1,264 @@
+{
+ "collections": {
+  "children": [
+   {
+    "children": [],
+    "name": "Collection",
+    "objects": [
+     "Camera",
+     "Cube",
+     "Light"
+    ]
+   }
+  ],
+  "name": "Scene Collection",
+  "objects": [
+   "SOLID",
+   "SOLID.001",
+   "gpghbb10.empties",
+   "gpghbb10_1"
+  ]
+ },
+ "file": "C:/Users/Oscar/Downloads/159285010-659-gpghbb10/gpghbb10.stp",
+ "import_seconds": 0.441,
+ "num_objects": 7,
+ "objects": [
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    0.685921,
+    -0.324013,
+    0.651558,
+    7.358891,
+    0.727676,
+    0.305421,
+    -0.61417,
+    -6.925791,
+    0.0,
+    0.895396,
+    0.445271,
+    4.958309,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Camera",
+   "parent": null,
+   "type": "CAMERA"
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "loops": 24,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "Material"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Cube",
+   "parent": null,
+   "polys": 6,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 8
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    -0.290865,
+    -0.771101,
+    0.566393,
+    4.076245,
+    0.955171,
+    -0.199883,
+    0.218391,
+    1.005454,
+    -0.055189,
+    0.604525,
+    0.794672,
+    5.903862,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Light",
+   "parent": null,
+   "type": "LIGHT"
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "loops": 10902,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "GRAY80"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "SOLID",
+   "parent": "gpghbb10_1",
+   "polys": 3634,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 1815
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "loops": 3162,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "GRAY23"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "SOLID.001",
+   "parent": "gpghbb10_1",
+   "polys": 1054,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 527
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "gpghbb10.empties",
+   "parent": null,
+   "type": "EMPTY"
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "gpghbb10_1",
+   "parent": "gpghbb10.empties",
+   "type": "EMPTY"
+  }
+ ],
+ "operator_kwargs": {},
+ "operator_result": [
+  "FINISHED"
+ ]
+}

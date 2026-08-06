@@ -1,0 +1,193 @@
+{
+ "collections": {
+  "children": [
+   {
+    "children": [],
+    "name": "Collection",
+    "objects": [
+     "Camera",
+     "Cube",
+     "Light"
+    ]
+   }
+  ],
+  "name": "Scene Collection",
+  "objects": [
+   "Block Man",
+   "Block Man 1.8m.empties"
+  ]
+ },
+ "file": "C:/Users/Oscar/Downloads/block-man-1-8m-1.snapshot.5/Block Man 1.8m.STEP",
+ "import_seconds": 0.128,
+ "num_objects": 5,
+ "objects": [
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "loops": 1212,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "STEP_ff00ff"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Block Man",
+   "parent": "Block Man 1.8m.empties",
+   "polys": 404,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 204
+  },
+  {
+   "collections": [
+    "Scene Collection"
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Block Man 1.8m.empties",
+   "parent": null,
+   "type": "EMPTY"
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    0.685921,
+    -0.324013,
+    0.651558,
+    7.358891,
+    0.727676,
+    0.305421,
+    -0.61417,
+    -6.925791,
+    0.0,
+    0.895396,
+    0.445271,
+    4.958309,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Camera",
+   "parent": null,
+   "type": "CAMERA"
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "loops": 24,
+   "materials": [
+    {
+     "diffuse": [
+      0.8,
+      0.8,
+      0.8,
+      1.0
+     ],
+     "name": "Material"
+    }
+   ],
+   "matrix_world": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Cube",
+   "parent": null,
+   "polys": 6,
+   "type": "MESH",
+   "uv_layers": [
+    "UVMap"
+   ],
+   "verts": 8
+  },
+  {
+   "collections": [
+    "Collection"
+   ],
+   "matrix_world": [
+    -0.290865,
+    -0.771101,
+    0.566393,
+    4.076245,
+    0.955171,
+    -0.199883,
+    0.218391,
+    1.005454,
+    -0.055189,
+    0.604525,
+    0.794672,
+    5.903862,
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "name": "Light",
+   "parent": null,
+   "type": "LIGHT"
+  }
+ ],
+ "operator_kwargs": {},
+ "operator_result": [
+  "FINISHED"
+ ]
+}

@@ -168,6 +168,14 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
                     obj["STEP_materials"] = json.dumps(
                         [mt.name if mt else "" for mt in obj.data.materials])
                 obj.display_type = "TEXTURED"
+                # Re-apply the engineering material if the original import
+                # used it (metadata persists as object custom properties)
+                if stored.get("eng_materials") and obj.get("STEP_material"):
+                    m._assign_engineering_material(obj, {
+                        "name": obj.get("STEP_material"),
+                        "description": obj.get("STEP_material_desc", ""),
+                        "density": obj.get("STEP_material_density", 0.0),
+                    })
                 if m._uv_options["unwrap"]:
                     unwrap_objs.append(obj)
                 done += 1

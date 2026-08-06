@@ -64,6 +64,7 @@ from OCP.STEPCAFControl import STEPCAFControl_Reader
 from OCP.TCollection import TCollection_ExtendedString
 from OCP.TColStd import TColStd_SequenceOfAsciiString
 from OCP.TDF import TDF_Label, TDF_LabelSequence
+from OCP.TDataStd import TDataStd_TreeNode
 from OCP.TDocStd import TDocStd_Document
 from OCP.TopAbs import (
     TopAbs_COMPOUND,
@@ -82,7 +83,9 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS_Shape, TopoDS_Compound, TopoDS
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import (
+    XCAFDoc,
     XCAFDoc_DocumentTool,
+    XCAFDoc_Material,
     XCAFDoc_ShapeTool,
     XCAFDoc_ColorTool,
     XCAFDoc_ColorGen,
@@ -435,6 +438,7 @@ class ShapeTreeNode:
     global_transform: np.ndarray = field(default_factory=np.eye(4, dtype=np.float32))
     shape: TopoDS_Shape = None
     color_override: tuple = None  # (r, g, b) instance color from component label
+    material: dict = None  # engineering material metadata (AP214/AP242)
 
     def __init__(self, parent, index, tag, name):
         self.parent = parent
@@ -446,6 +450,7 @@ class ShapeTreeNode:
         self.global_transform = np.eye(4, dtype=np.float32)
         self.shape = None
         self.color_override = None
+        self.material = None
 
     def get_values(self):
         """
@@ -554,6 +559,42 @@ class ReadSTEP:
                 c, colortype = cc, 3
 
         return c, colortype, colorset
+
+    def query_material(self, label):
+        """Engineering material metadata (AP214/AP242) linked to a label.
+
+        The link is a TDataStd_TreeNode with the XCAF MaterialRef GUID
+        pointing at a material label. Read via the XCAFDoc_Material
+        attribute directly — the MaterialTool.GetMaterial_s out-parameters
+        are handle references that OCP's bindings cannot write back.
+        Returns {"name", "description", "density"} or None.
+        """
+        # OCP wart: FindAttribute(guid, TDataStd_TreeNode) CRASHES (access
+        # violation in TKLCAF) when the attribute is absent — always check
+        # IsAttribute first and only fetch on a confirmed hit.
+        guid = XCAFDoc.MaterialRefGUID_s()
+        if not label.IsAttribute(guid):
+            return None
+        node = TDataStd_TreeNode()
+        if not label.FindAttribute(guid, node):
+            return None
+        father = node.Father()
+        if father is None:
+            return None
+        mlabel = father.Label()
+        if not mlabel.IsAttribute(XCAFDoc_Material.GetID_s()):
+            return None
+        mat = XCAFDoc_Material()
+        if not mlabel.FindAttribute(XCAFDoc_Material.GetID_s(), mat):
+            return None
+        name = mat.GetName()
+        desc = mat.GetDescription()
+        info = {
+            "name": name.ToCString() if name is not None else "",
+            "description": desc.ToCString() if desc is not None else "",
+            "density": float(mat.GetDensity()),
+        }
+        return info if info["name"] else None
 
     def print_all_colors(self):
         tcol = Quantity_Color(1.0, 0.0, 1.0, Quantity_TOC_RGB)
@@ -848,6 +889,11 @@ class ReadSTEP:
                         if o_ok:
                             new_leaf.color_override = (oc.Red(), oc.Green(), oc.Blue())
 
+                        # Engineering material on the component reference
+                        # (rare — usually it sits on the referred product,
+                        # picked up in the simple-shape branch below)
+                        new_leaf.material = self.query_material(label)
+
                         _get_sub_shapes(label_reference, level + 1, tree, node.index)
                     else:
                         # TODO: process rest of the data
@@ -857,6 +903,10 @@ class ReadSTEP:
                 # TODO: self.shape_label stops being unique when shapes aren't transformed
                 shape = XCAFDoc_ShapeTool.GetShape_s(lab)
                 master_leaf.set_shape(shape)
+                # Engineering material from the product label (before the
+                # shared-shape early return so every occurrence carries it)
+                if master_leaf.material is None:
+                    master_leaf.material = self.query_material(lab)
                 key = ShapeKey(shape)
                 if key in self.shape_label:
                     # Shape already in
