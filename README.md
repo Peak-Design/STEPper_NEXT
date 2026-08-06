@@ -1,8 +1,23 @@
-# STEPper NEXT - STEP File Importer for Blender
+<h1 align="center">STEPper NEXT</h1>
 
-Blender addon for importing STEP (`.step` / `.stp`), IGES (`.iges` / `.igs`) and BREP (`.brep` / `.brp`) files directly into Blender using the OpenCASCADE (OCC) geometry kernel. The produced mesh is a triangulation of the underlying CAD surface with smooth normals computed from the analytic shape geometry.
+<p align="center">
+  <strong>STEP, IGES and BREP import for Blender, on the OpenCASCADE kernel.</strong><br>
+  <a href="../../releases/latest">Download</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#material-database">Material database</a> ·
+  <a href="https://ko-fi.com/oskarasspalvys">Tip jar</a>
+</p>
 
-Originally created by **ambi** (Tommi Hyppanen). Now maintained by **Peak Design** (Oskaras Spalvys).
+---
+
+STEPper NEXT imports STEP (`.step` / `.stp`), IGES (`.iges` / `.igs`) and BREP
+(`.brep` / `.brp`) files directly into Blender using the OpenCASCADE (OCC)
+geometry kernel. The produced mesh is a triangulation of the underlying CAD
+surface with smooth normals computed from the analytic shape geometry.
+
+Originally created by **ambi** (Tommi Hyppanen). Now maintained by
+**Peak Design** (Oskaras Spalvys).
 
 ## Features
 
@@ -32,6 +47,40 @@ Originally created by **ambi** (Tommi Hyppanen). Now maintained by **Peak Design
 - Part hierarchy preserved as flat collection, nested collections, parented empties, or collection instances
 - Native C++ mesh extraction with multithreaded normal computation, up to 10x faster than v1.x
 
+## Install
+
+STEPper NEXT ships as a Blender **extension** (since v2.3.0). The OpenCASCADE
+(OCP) bindings are bundled as a wheel that Blender installs automatically.
+
+1. Download the `.zip` for your platform from the [Releases](../../releases) page.
+2. Drag & drop the `.zip` into a Blender window (or use **Edit > Preferences > Get Extensions >** drop-down menu **> Install from Disk...**).
+3. Enable it under **Add-ons** if it isn't enabled automatically.
+
+The importer panel will appear in **3D View > Tools panel > STEPper NEXT**.
+
+> **Upgrading from v2.2.x or older (legacy addon):** remove the old
+> "STEPper NEXT" entry from **Preferences > Add-ons** and restart Blender
+> before installing the extension.
+
+To remove or update: remove the extension from **Preferences > Get Extensions >
+Installed** (or Add-ons). To update, install the new `.zip` and Blender
+replaces the older version.
+
+### Requirements
+
+- **Blender 5.1** with Python 3.13
+- **Windows only:** [Visual Studio C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) (vc_redist.x64.exe)
+
+### Platform support
+
+| Platform | Status |
+|----------|--------|
+| **Windows 10+ (64-bit)** | Tested and supported |
+| **macOS Apple Silicon (M1/M2/M3/M4)** | Experimental (untested) |
+| **Linux (64-bit)** | Experimental (untested) |
+
+> **Note:** macOS and Linux builds are automatically compiled via GitHub Actions but have not been tested yet. If you encounter issues on these platforms, please [open an issue](../../issues).
+
 ## Material Database
 
 The material database lets you define mappings from generic STEP material names (e.g., "GRAY", "BLACK") to authored Blender materials. Once configured, materials are automatically replaced every time you import a STEP file.
@@ -46,11 +95,11 @@ The material database lets you define mappings from generic STEP material names 
 4. Manually assign/tweak material mappings in the mapping table if required.
 5. The database is saved as a `.blend` file in the addon's `MaterialDB/` folder.
 
-### Importing with a Database
+### Importing with a database
 
 Select a database from the dropdown in the STEP import dialog under **Material DB**. The selected database persists between sessions. When importing, all matching STEP materials are automatically replaced.
 
-### Panel Buttons
+### Panel buttons
 
 | Button | Description |
 |--------|-------------|
@@ -58,11 +107,11 @@ Select a database from the dropdown in the STEP import dialog under **Material D
 | **Duplicate** | Copy the active database under a new name. Useful for minor variations between projects. |
 | **Load** | Reload mappings from the active database file and append its materials into the current file. |
 | **Delete** (trash icon) | Delete the active database file. |
-| **Update** | Scan the scene for any new original STEP material names not already in the database and add them. **Does not modify existing mappings.** USe this to expand and grow your material database. Does not auto-save. |
+| **Update** | Scan the scene for any new original STEP material names not already in the database and add them. **Does not modify existing mappings.** Use this to expand and grow your material database. Does not auto-save. |
 | **Save** | Write the current mappings and materials to the database file. |
 | **Apply** | Apply the active database mappings to objects in the scene. Works with the **Selection only** checkbox to limit to selected objects. |
 
-### Material Mappings Table
+### Material mappings table
 
 Each row shows an original STEP material name and a dropdown to pick the replacement Blender material. You can change any mapping and click **Save** to update the database.
 
@@ -102,40 +151,6 @@ A single `UVMap` layer is created; the **UV Map** import option chooses its cont
 
 With **Remember import settings** enabled in the addon preferences (the default), the import dialog's options are saved after every import and restored in your next Blender session, so you configure them once. They are written out with Blender's normal preferences save, so keep *Save Preferences on Quit* on (Blender's default) or save preferences manually. Turn the option off to fall back to the fixed defaults in the preferences instead.
 
-## Platform Support
-
-| Platform | Status |
-|----------|--------|
-| **Windows 10+ (64-bit)** | Tested and supported |
-| **macOS Apple Silicon (M1/M2/M3/M4)** | Experimental (untested) |
-| **Linux (64-bit)** | Experimental (untested) |
-
-## Requirements
-
-- **Blender 5.1** with Python 3.13
-- **Windows only:** Visual Studio C++ Redistributable: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170 (vc_redist.x64.exe)
-
-## Installation
-
-STEPper NEXT ships as a Blender **extension** (since v2.3.0). The OpenCASCADE
-(OCP) bindings are bundled as a wheel that Blender installs automatically.
-
-1. Download the `.zip` for your platform from the [Releases](../../releases) page.
-2. Drag & drop the `.zip` into a Blender window (or use **Edit > Preferences > Get Extensions >** drop-down menu **> Install from Disk...**).
-3. Enable it under **Add-ons** if it isn't enabled automatically.
-
-The importer panel will appear in **3D View > Tools panel > STEPper NEXT**.
-
-> **Upgrading from v2.2.x or older (legacy addon):** remove the old
-> "STEPper NEXT" entry from **Preferences > Add-ons** and restart Blender
-> before installing the extension.
-
-> **Note:** macOS and Linux builds are automatically compiled via GitHub Actions but have not been tested yet. If you encounter issues on these platforms, please [open an issue](../../issues).
-
-## Uninstall / Update
-
-Remove the extension from **Preferences > Get Extensions > Installed** (or Add-ons). To update, install the new `.zip` and Blender replaces the older version.
-
 ## Version History
 
 | Version | Blender | Changes |
@@ -159,11 +174,11 @@ Remove the extension from **Preferences > Get Extensions > Installed** (or Add-o
 
 This addon is free and open source under the GPL v3 license.
 
-**ambi** - original creator:
-https://ambient.gumroad.com/l/stepper
+**ambi** — original creator: https://ambient.gumroad.com/l/stepper
 
-**Peak Design** - current maintainer, tips welcome:
-https://ko-fi.com/oskarasspalvys
+**Peak Design** — current maintainer. Tips welcome:
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/oskarasspalvys)
 
 ## For Developers
 
