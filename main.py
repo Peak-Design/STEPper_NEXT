@@ -164,6 +164,32 @@ def add_material(name, color, link_vertex_color=False, overwrite=False):
     return mat
 
 
+def _material_base_color(mat, fallback=(0.8, 0.8, 0.8)):
+    """Read back a material's base color as an (r, g, b) tuple.
+
+    add_material writes the CAD color to the Principled BSDF's Base Color
+    input and never touches mat.diffuse_color (the viewport swatch), so
+    reading diffuse_color would always return Blender's default grey.
+    Materials the addon did not build (e.g. a Material Database
+    replacement using some other shader) fall back to diffuse_color.
+    """
+    if mat is None:
+        return fallback
+    if mat.use_nodes and mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.type != "BSDF_PRINCIPLED":
+                continue
+            # Named lookup can fail under some UI translations; input 0 of
+            # a Principled BSDF is Base Color either way.
+            inp = node.inputs.get("Base Color")
+            if inp is None and len(node.inputs):
+                inp = node.inputs[0]
+            if inp is not None:
+                return tuple(inp.default_value[:3])
+            break
+    return tuple(mat.diffuse_color[:3])
+
+
 def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names, build_materials=True):
     if build_materials:
         # set colors and mats
@@ -552,7 +578,7 @@ def _assign_engineering_material(obj, mat_info):
     if mat is None:
         color = (0.8, 0.8, 0.8)
         if len(me.materials) and me.materials[0] is not None:
-            color = tuple(me.materials[0].diffuse_color[:3])
+            color = _material_base_color(me.materials[0], color)
         mat = add_material(name, color)
     if mat_info.get("density"):
         mat["STEP_density"] = float(mat_info["density"])
