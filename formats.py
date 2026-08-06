@@ -52,7 +52,7 @@ class ReadIGES(ReadSTEP):
         try:
             ok = reader.Transfer(doc)
             if not ok:
-                print("IGES transfer reported failure — continuing with partial data")
+                print("IGES transfer reported failure, continuing with partial data")
         except Exception as e:
             raise AssertionError(f"IGES transfer failed: {e}")
 

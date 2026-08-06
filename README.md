@@ -11,7 +11,7 @@ Originally created by **ambi** (Tommi Hyppanen). Now maintained by **Peak Design
 - Direct STEP, IGES and BREP import via OpenCASCADE
 - Analytic surface normals for smooth, seamless shading on curved surfaces
 - Sharp edges marked from the CAD topology, with custom split normals
-- Quality presets with unit-aware deflection — a physical 0.8 mm stays 0.8 mm whatever units the file uses — plus relative (adaptive) tessellation
+- Quality presets with unit-aware deflection (a physical 0.8 mm stays 0.8 mm whatever units the file uses), plus relative (adaptive) tessellation
 - Robust handling of corrupted geometry: imports everything it can instead of skipping whole parts, with ShapeFix healing for damaged shapes
 - Free edges and sketches optionally imported as curve objects
 
@@ -20,7 +20,7 @@ Originally created by **ambi** (Tommi Hyppanen). Now maintained by **Peak Design
 - Per-face vertex colors and automatic material creation from STEP color data
 - Engineering material metadata (AP242/AP214 name, description, density) imported as custom properties, and optionally as named Blender materials
 - Material database system for automatic material replacement on import
-- UV generation from CAD surfaces, angle-based unwrap, or box projection — with optional real-world UV scale and automatic seams on cylindrical/closed faces
+- UV generation from CAD surfaces, angle-based unwrap, or box projection, with optional real-world UV scale and automatic seams on cylindrical/closed faces
 
 **Workflow**
 
@@ -30,7 +30,7 @@ Originally created by **ambi** (Tommi Hyppanen). Now maintained by **Peak Design
 - Regenerate parts at a different quality, Prune/Restore hierarchy, mesh cleanup
 - Import options remembered between Blender sessions
 - Part hierarchy preserved as flat collection, nested collections, parented empties, or collection instances
-- Native C++ mesh extraction with multithreaded normal computation — up to 10x faster than v1.x
+- Native C++ mesh extraction with multithreaded normal computation, up to 10x faster than v1.x
 
 ## Material Database
 
@@ -75,11 +75,11 @@ Each row shows an original STEP material name and a dropdown to pick the replace
 
 ## Engineering Materials (AP242 / AP214)
 
-STEP files can carry the engineering material assigned in the source CAD system — name, description and density — alongside the geometry. Every import stores whatever it finds on each object as `STEP_material`, `STEP_material_desc` and `STEP_material_density` custom properties.
+STEP files can carry the engineering material assigned in the source CAD system (name, description and density) alongside the geometry. Every import stores whatever it finds on each object as `STEP_material`, `STEP_material_desc` and `STEP_material_density` custom properties.
 
 The **Engineering Materials** import option (on by default) additionally gives each part a single Blender material named after the CAD material, e.g. `AISI 304 Steel`, instead of the color-derived ones. That pairs naturally with the Material Database above: map `AISI 304 Steel` to your authored steel shader once, and every future import picks it up.
 
-> **Not every CAD system exports this.** SOLIDWORKS does not write engineering material data into STEP at all, in any schema — and its "Export Appearances" option only carries flat per-face colours, since STEP has no representation for textures or PBR properties. CATIA and NX do export material data with the appropriate options enabled. Files without material data simply import without the custom properties.
+> **Not every CAD system exports this.** SOLIDWORKS does not write engineering material data into STEP at all, in any schema, and its "Export Appearances" option only carries flat per-face colours, since STEP has no representation for textures or PBR properties. CATIA and NX do export material data with the appropriate options enabled. Files without material data simply import without the custom properties.
 
 ## UV Maps
 
@@ -92,7 +92,7 @@ A single `UVMap` layer is created; the **UV Map** import option chooses its cont
 | **Box Project** | Triplanar projection with a world-unit tile size. |
 | **None** | No UV layer. |
 
-**Normalize UVs** (off by default) fits the UVs to the 0-1 square. With it off, UVs are scaled to real-world scene units instead — islands stay packed and are uniformly rescaled — so one shared material shows its texture at the same physical scale on every part, which is usually what you want for CAD.
+**Normalize UVs** (off by default) fits the UVs to the 0-1 square. With it off, UVs are scaled to real-world scene units instead (islands stay packed and are uniformly rescaled), so one shared material shows its texture at the same physical scale on every part, which is usually what you want for CAD.
 
 **Split Closed Faces** (on by default) marks a UV seam along the parametric closure of cylinders, cones and tori, and across smooth-joined face groups that form closed tubes or rings. CAD data has no seam there, and unwrapping without one produces badly distorted islands. Shading is unaffected.
 
@@ -132,7 +132,7 @@ The importer panel will appear in **3D View > Tools panel > STEPper NEXT**.
 
 ## Uninstall / Update
 
-Remove the extension from **Preferences > Get Extensions > Installed** (or Add-ons). To update, install the new `.zip` — Blender replaces the older version.
+Remove the extension from **Preferences > Get Extensions > Installed** (or Add-ons). To update, install the new `.zip` and Blender replaces the older version.
 
 ## Version History
 
@@ -164,9 +164,9 @@ https://ko-fi.com/oskarasspalvys
 
 ## For Developers
 
-The OpenCASCADE (OCP) bindings come from the [cadquery-ocp-novtk](https://pypi.org/project/cadquery-ocp-novtk/) wheels committed in `wheels/` (one per platform, referenced by `blender_manifest.toml` — Blender installs the matching one at extension install time). A small native mesh-extraction module (`native/`) ships per platform with its own plain-named OCCT subset in `native_libs/`; it talks to the importer via a BinTools serialize handoff, so it is independent of the Python bindings. Per-platform extension zips are built by GitHub Actions (`.github/workflows/release.yml`), which narrows the manifest to one platform/wheel per zip via `ci/make_platform_manifest.py` and runs `ci/smoke_test.py` before packaging.
+The OpenCASCADE (OCP) bindings come from the [cadquery-ocp-novtk](https://pypi.org/project/cadquery-ocp-novtk/) wheels committed in `wheels/` (one per platform, referenced by `blender_manifest.toml`; Blender installs the matching one at extension install time). A small native mesh-extraction module (`native/`) ships per platform with its own plain-named OCCT subset in `native_libs/`; it talks to the importer via a BinTools serialize handoff, so it is independent of the Python bindings. Per-platform extension zips are built by GitHub Actions (`.github/workflows/release.yml`), which narrows the manifest to one platform/wheel per zip via `ci/make_platform_manifest.py` and runs `ci/smoke_test.py` before packaging.
 
-For development in `scripts/addons` (legacy addon path, still supported via the retained `bl_info`): extract the Windows wheel into the addon folder so `import OCP` resolves — `python -m zipfile -e wheels/cadquery_ocp_novtk-*-win_amd64.whl .` (the extracted `OCP/` + `cadquery_ocp_novtk.libs/` folders are gitignored).
+For development in `scripts/addons` (legacy addon path, still supported via the retained `bl_info`): extract the Windows wheel into the addon folder so `import OCP` resolves: `python -m zipfile -e wheels/cadquery_ocp_novtk-*-win_amd64.whl .` (the extracted `OCP/` + `cadquery_ocp_novtk.libs/` folders are gitignored).
 
 Parity testing: `blender -b --factory-startup --python ci/parity_harness.py -- <file.step> <out.json> ['<operator_kwargs_json>']` dumps a deterministic scene snapshot (objects, mesh counts, materials, transforms, collections) for diffing. Reference snapshots live in `ci/baselines/`, together with the self-contained `mat_ap242.step` / `mat_ap214.step` fixtures used to test engineering-material import; the other baselines reference local corpus files by absolute path and are meant as a change detector rather than a portable test suite.
 

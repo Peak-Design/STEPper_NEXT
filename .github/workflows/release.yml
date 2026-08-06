@@ -1,7 +1,7 @@
 name: Build & Release
 
 on:
-  # Manual trigger — click "Run workflow" in GitHub Actions tab
+  # Manual trigger: click "Run workflow" in GitHub Actions tab
   workflow_dispatch:
     inputs:
       version:
@@ -232,7 +232,7 @@ jobs:
           fix_tree STEPper_NEXT-macos-arm64
           fix_tree STEPper_NEXT-macos-x64
 
-      - name: Smoke test (arm64 only — x64 module can't load in arm python)
+      - name: Smoke test (arm64 only, x64 module can't load in arm python)
         run: |
           cd STEPper_NEXT-macos-arm64 && unzip -q wheels/*.whl -d test_site && cd ..
           PYTHONPATH="$PWD/STEPper_NEXT-macos-arm64/test_site" python ci/smoke_test.py STEPper_NEXT-macos-arm64

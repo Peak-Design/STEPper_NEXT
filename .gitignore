@@ -1,4 +1,4 @@
-/__pycache__
+__pycache__/
 /MaterialDB
 
 # Locally vendored OCP bindings for the legacy scripts/addons dev workflow.

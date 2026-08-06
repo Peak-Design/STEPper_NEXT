@@ -205,7 +205,7 @@ def bpy_update_object_data(objdata, bm, vcol_name, colors, uvs, norms, mat_names
                     mat_col = _quantize_color(mat_col)
                     mat_col_name = "STEP_" + "".join("{0:0{1}x}".format(int(mat_col[i] * 255), 2) for i in range(3))
 
-                # add_material truncates to 60 chars — truncate here too or
+                # add_material truncates to 60 chars, so truncate here too or
                 # the bpy.data.materials lookups below KeyError on long
                 # CAD material names
                 mat_col_name = mat_col_name[:60]
@@ -367,7 +367,7 @@ def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True)
         # apply
         set_obj_matrix_world(obj, mat)
 
-    # Apply scale — bake scale into mesh vertices so obj.scale = (1,1,1)
+    # Apply scale: bake scale into mesh vertices so obj.scale = (1,1,1)
     # Uses direct vertex scaling instead of bpy.ops.object.transform_apply
     # to avoid "Cannot apply to a multi user" errors on instanced meshes.
     if apply_scale and scale != 1.0:
@@ -399,7 +399,7 @@ def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True)
         # Reset scale to 1 on EVERY object, hierarchy empties included (the
         # scale now lives in the mesh data). Snapshot the target world
         # matrices first and assign parents-before-children through
-        # matrix_basis — resetting only the meshes would leave a 0.001-scaled
+        # matrix_basis, since resetting only the meshes would leave a 0.001-scaled
         # top empty with 1000-scaled children (world-correct, locally wrong),
         # and naive matrix_world writes mid-loop read stale parent state.
         one = Vector((1.0, 1.0, 1.0))
@@ -424,7 +424,7 @@ def transform_to_up(up, chosen_objects, scale, to_cursor=True, apply_scale=True)
                 obj.matrix_basis = desired[obj]
 
 
-# Debug timing flag — set from addon settings at import start
+# Debug timing flag, set from addon settings at import start
 _debug_timing = False
 
 # Cumulative timing accumulators for profiling Phase 2
@@ -482,7 +482,7 @@ def precompute_mesh_data(step_reader, shp, lind, angd, hacks, part_name="",
         if _debug_timing: t4 = time.time()
         mesh.fill_empty_color()
         if _debug_timing: t5 = time.time()
-        # Data stays in numpy arrays — no conversion needed
+        # Data stays in numpy arrays, no conversion needed
         colors = mesh.get_loop_colors()
         mat_names = mesh.get_loop_mat_names()
         norms = mesh.get_loop_norms()
@@ -628,8 +628,8 @@ def _unwrap_uv_objects(objs, world_scale=None):
 def _scale_unwrap_to_world(me, world_scale):
     """Rescale the packed unwrapped 'UVMap' so 1 UV unit ~= 1 scene unit.
 
-    The unwrap is near-isometric per island, so a single uniform factor —
-    the median of per-triangle sqrt(3D area / UV area) — restores physical
+    The unwrap is near-isometric per island, so a single uniform factor
+    (the median of per-triangle sqrt(3D area / UV area)) restores physical
     scale while keeping the packed island arrangement.
     """
     layer = me.uv_layers.get("UVMap")
@@ -707,7 +707,7 @@ def _apply_native_mesh(obj, mesh, colors, mat_names, norms, uvs,
     if n_faces > 0 and colors is not None and len(colors) > 0:
         color_attr = me.color_attributes.new(
             name=vcol_name, type='FLOAT_COLOR', domain='CORNER')
-        # colors is (T*3, 3) float32 — need RGBA (T*3, 4)
+        # colors is (T*3, 3) float32, need RGBA (T*3, 4)
         n_loops = len(colors)
         rgba = np.ones((n_loops, 4), dtype=np.float32)
         rgba[:, :3] = colors
@@ -893,8 +893,8 @@ def _compute_edge_attributes(mesh):
     # the position-based vertex fuse welds them, but the per-corner UV
     # snapshot still disagrees across the edge. So an interior edge WITHIN
     # one OCC face whose corner UVs differ at BOTH endpoints lies on the
-    # closure (the both-endpoints rule keeps collapsed poles — where every
-    # touching edge has one discontinuous corner — out of the seam set).
+    # closure (the both-endpoints rule keeps collapsed poles, where every
+    # touching edge has one discontinuous corner, out of the seam set).
     # Marked as UV seam only, never sharp: shading stays smooth.
     if _uv_options.get("split_closed", True):
         loop_uvs = None
@@ -918,7 +918,7 @@ def _compute_edge_attributes(mesh):
         # triangle regions that are not topological disks (Euler
         # characteristic V - E + F != 1: tubes, rings, sphere halves) and
         # seam their internal CAD-face boundaries, splitting them into
-        # flattenable patches. UV seam only — shading is untouched.
+        # flattenable patches. UV seam only: shading is untouched.
         smooth_pair = ~np.isin(int_edge_keys, seam_keys)
         a = face_of[he0][smooth_pair]
         b = face_of[he1][smooth_pair]
@@ -1193,7 +1193,7 @@ def _write_material_database(filepath, mappings_dict):
 
     # Collect datablocks to write: the text + all replacement materials.
     # Linked/library materials (e.g. from asset browser) cannot be written
-    # directly — make temporary local copies for those.
+    # directly, so make temporary local copies for those.
     datablocks = {text}
     temp_copies = []
     for replacement_name in set(mappings_dict.values()):
@@ -1388,7 +1388,7 @@ def _cleanup_unused_step_materials(known_names=None):
     """Remove zero-user materials that were generated by STEP import.
 
     known_names: additional material names known to come from the import
-    (e.g. the original-name keys of the active matdb mappings) — CAD color
+    (e.g. the original-name keys of the active matdb mappings); CAD color
     names like "GRAY" don't carry the STEP_ prefix.
     """
     removed = 0
@@ -1519,7 +1519,7 @@ def load_step(
     # with unresolved references).  Running it here makes the cost visible
     # instead of hiding it inside the first build_trimesh call.
     if step_reader.import_problems.get("Unresolved refs", 0) > 0 or True:
-        # Always try — the reader checks internally if recovery is needed
+        # Always try: the reader checks internally if recovery is needed
         rec_start = time.time()
         step_reader._build_recovery_compound()
         rec_dt = time.time() - rec_start
@@ -1633,7 +1633,7 @@ def load_step(
             # If object already built, just copy it using linked mesh data
             if shape_name in created_names and created_names[shape_name] is None:
                 # Earlier occurrence produced no geometry and was removed
-                # (skip_empty_objects) — don't rebuild and re-report it for
+                # (skip_empty_objects), so don't rebuild and re-report it for
                 # every further occurrence of the same shape.
                 pass
             elif shape_name in created_names:
@@ -1658,7 +1658,7 @@ def load_step(
                 obj = create_new_obj_with_mesh(name)
 
                 if shape_name in precomputed:
-                    # Use pre-computed data — only bpy/bmesh work on main thread
+                    # Use pre-computed data: only bpy/bmesh work on main thread
                     mesh, colors, mat_names, norms, uvs = precomputed[shape_name]
                     apply_mesh_to_blender(
                         obj, mesh, colors, mat_names, norms, uvs,
@@ -1707,7 +1707,7 @@ def load_step(
                         created_objs.append(obj)
 
             # Free-edge curves (sketches, construction wires) as curve
-            # objects — also for parts whose mesh came out empty (sketch-only
+            # objects, also for parts whose mesh came out empty (sketch-only
             # parts are exactly the ones that need this).
             if import_curves and not hierarchy_instances:
                 ckey = shape_name + "|curves"
@@ -1780,7 +1780,7 @@ def load_step(
         _print_phase2_times()
     print("\n" + repr(step_reader.import_problems))
 
-    # Optional packed angle-based unwrap (unique meshes only — linked
+    # Optional packed angle-based unwrap (unique meshes only; linked
     # copies share the datablock and get it for free). Meshes are still in
     # file units here, so real-world mode converts through unit_scale.
     if _uv_options.get("unwrap"):
@@ -2224,8 +2224,8 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
         name="Normalize UVs",
         description="Fit UVs to the 0-1 square (per CAD face in Surface "
                     "mode, packed per mesh in Unwrap mode). Disable to "
-                    "scale UVs to real-world scene units instead — packed "
-                    "islands are kept and uniformly rescaled — so a shared "
+                    "scale UVs to real-world scene units instead (packed "
+                    "islands are kept and uniformly rescaled), so a shared "
                     "material shows textures at the same physical scale on "
                     "every part",
         default=False,
@@ -2234,7 +2234,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
     eng_materials: bpy.props.BoolProperty(
         name="Engineering Materials",
         description="When the STEP file carries engineering material "
-                    "metadata (AP242/AP214 — e.g. exported from CATIA or "
+                    "metadata (AP242/AP214, e.g. exported from CATIA or "
                     "NX; SOLIDWORKS does not export it), assign each part "
                     "ONE Blender material named after it (\"AISI 304 "
                     "Steel\") instead of color-based materials. Density and "
@@ -2299,7 +2299,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
             if prefs.active_matdb in valid:
                 self.material_database = prefs.active_matdb
         # Drag & drop (FileHandler) pre-populates directory+files (multi
-        # drop) or filepath (single drop) — thanks to SKIP_SAVE these are
+        # drop) or filepath (single drop). Thanks to SKIP_SAVE these are
         # only ever set by an actual drop. Show the options dialog instead
         # of the file browser in that case.
         if (self.directory and len(self.files) > 0) or self.filepath:
@@ -2352,7 +2352,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
         # Remember the dialog options for the next session. Reload/Rebuild
         # and the background worker call this operator with override_file
-        # set — those must not overwrite the user's dialog choices.
+        # set, and those must not overwrite the user's dialog choices.
         if self.override_file == "":
             import_ui.save_last_used(self, _get_addon_prefs())
 
@@ -2365,7 +2365,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
                 job = {"files": full_paths,
                        "op_kwargs": self._background_kwargs(),
                        # Result-affecting addon preferences travel with the
-                       # job — the worker runs factory-startup and would
+                       # job, because the worker runs factory-startup and would
                        # otherwise import with default prefs
                        "prefs": background_mod.prefs_snapshot(
                            _get_addon_prefs())}
@@ -2557,7 +2557,7 @@ class STEP_OT_RebuildSelected(bpy.types.Operator):
     bl_idname = "object.occ_rebuild_selected"
     bl_label = "Rebuild selected objects from the STEP file"
     bl_description = ("Rebuild selected objects from the STEP file.\n"
-                      "Legacy tool — prefer 'Regenerate Selected' in the "
+                      "Legacy tool: prefer 'Regenerate Selected' in the "
                       "Tools panel.\nExperimental: causes issues on some "
                       "shapes")
 
@@ -2571,7 +2571,7 @@ class STEP_OT_RebuildSelected(bpy.types.Operator):
         curname = ""
         build_tags = set()
         rebuilt_meshes = set()
-        # Only mesh objects that carry STEP metadata can be rebuilt — a
+        # Only mesh objects that carry STEP metadata can be rebuilt; a
         # box-select of an imported assembly also contains hierarchy empties
         my_selection = [o for o in context.selected_objects
                         if o.data is not None
@@ -2686,7 +2686,7 @@ class STEP_OT_MatDBCreate(bpy.types.Operator):
 
         filepath = os.path.join(_get_matdb_dir(), name + ".blend")
         if os.path.exists(filepath):
-            self.report({'ERROR'}, f"Database '{name}' already exists — "
+            self.report({'ERROR'}, f"Database '{name}' already exists, "
                         "choose another name or delete it first")
             return {'CANCELLED'}
 

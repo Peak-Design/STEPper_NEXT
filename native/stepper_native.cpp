@@ -1,5 +1,5 @@
 /*
- * stepper_native.cpp — Fast mesh extraction from OCC triangulations.
+ * stepper_native.cpp: Fast mesh extraction from OCC triangulations.
  *
  * Python extension module that receives a BinTools-serialized compound of
  * faces (bytes), deserializes it with its own OCCT copy, meshes any face
@@ -109,7 +109,7 @@ static FaceMesh extract_one_face(const TopoDS_Face& face,
             fm.uvs[ui + 1] = 0.0f;
         }
 
-        /* Placeholder normals — Python recomputes from analytic surface */
+        /* Placeholder normals; Python recomputes from analytic surface */
         int ni = (i - 1) * 3;
         fm.norms[ni + 0] = 0.0f;
         fm.norms[ni + 1] = 0.0f;
@@ -148,7 +148,7 @@ static PyObject* py_mesh_and_extract(PyObject* /*self*/, PyObject* args)
                           &relative))
         return NULL;
 
-    /* Deserialize, mesh and extract without holding the GIL — this is the
+    /* Deserialize, mesh and extract without holding the GIL. This is the
      * expensive, pure-C++ part. */
     std::vector<FaceMesh> meshes;
     int total_verts = 0;
@@ -308,10 +308,10 @@ static PyMethodDef methods[] = {
      "Deserialize a BinTools compound of faces, mesh missing faces and\n"
      "extract all triangulations.\n\n"
      "Args:\n"
-     "    brep_bytes: bytes — BinTools-serialized compound (triangulation\n"
+     "    brep_bytes: bytes - BinTools-serialized compound (triangulation\n"
      "        payload included; faces are extracted in compound order)\n"
-     "    lin_def: float — linear deflection for the safety-net meshing\n"
-     "    ang_def: float — angular deflection for the safety-net meshing\n\n"
+     "    lin_def: float - linear deflection for the safety-net meshing\n"
+     "    ang_def: float - angular deflection for the safety-net meshing\n\n"
      "Returns:\n"
      "    Tuple of 10 numpy arrays:\n"
      "    (all_verts, all_norms, all_uvs, all_faces,\n"

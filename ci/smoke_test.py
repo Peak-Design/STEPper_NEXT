@@ -80,6 +80,6 @@ assert abi >= 2, f"expected native ABI_VERSION >= 2, got {abi}"
 result4 = stepper_native.mesh_and_extract(buf.getvalue(), 0.8, 0.5, True)
 assert result4[3].shape[0] >= 12, "4-arg (relative) call returned no triangles"
 
-print(f"OK: stepper_native handoff (ABI {abi}) — {n_faces} faces, "
+print(f"OK: stepper_native handoff (ABI {abi}): {n_faces} faces, "
       f"{all_faces.shape[0]} triangles, {all_verts.shape[0]} vertices")
 print("SMOKE TEST PASSED")

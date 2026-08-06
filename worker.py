@@ -30,7 +30,7 @@ def _parent_alive(pid):
         if not handle:
             return False
         # OpenProcess can still succeed on an exited process (its object
-        # lives while any handle exists) — a zero-timeout wait tells us
+        # lives while any handle exists); a zero-timeout wait tells us
         # whether it is actually running.
         res = kernel32.WaitForSingleObject(handle, 0)
         kernel32.CloseHandle(handle)
@@ -75,7 +75,7 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.preferences.addon_enable(module=module)
 
-    # Mirror the parent session's result-affecting addon preferences —
+    # Mirror the parent session's result-affecting addon preferences:
     # factory-startup defaults would silently change the import output.
     addon = bpy.context.preferences.addons.get(module)
     if addon is not None:

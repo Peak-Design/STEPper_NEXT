@@ -77,7 +77,7 @@ def _restore_last_used(op, prefs):
             continue
         # Assigning quality_preset marks it "set" for the session, which
         # would override the artist-friendly detail slider (see
-        # make_deflection_spec) — same rule as seeding below.
+        # make_deflection_spec); same rule as seeding below.
         if key == "quality_preset" and prefs.simpler_parameters:
             continue
         try:
@@ -90,11 +90,11 @@ def make_deflection_spec(op, prefs):
     """Build a deflection spec dict from the operator's properties.
 
     Modes:
-      legacy   — raw file-unit values (old lin_deflection/ang_deflection
+      legacy:    raw file-unit values (old lin_deflection/ang_deflection
                  semantics); used when the legacy props were explicitly set
                  (scripts, parity harness) so old callers are unaffected.
-      detail   — simple-mode integer detail level (resolved by caller).
-      physical — linear deflection is a physical length in meters, converted
+      detail:    simple-mode integer detail level (resolved by caller).
+      physical:  linear deflection is a physical length in meters, converted
                  to file units per file once the unit scale is known.
     """
     legacy_set = (op.properties.is_property_set("lin_deflection")
@@ -154,7 +154,7 @@ def seed_from_prefs(op, prefs):
         op.hierarchy_types = prefs.preferred_hierarchy
         # Assigning quality_preset marks it "set" for the whole session,
         # which would permanently override the artist-friendly detail
-        # slider (see make_deflection_spec) — skip seeding it in that mode.
+        # slider (see make_deflection_spec), so skip seeding it in that mode.
         if not prefs.simpler_parameters:
             op.quality_preset = prefs.default_quality_preset
     except (AttributeError, TypeError):

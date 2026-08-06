@@ -1,8 +1,8 @@
 # Non-blocking background import for STEPper NEXT.
 #
 # OCP holds the GIL during STEP parsing (measured), so responsiveness
-# requires a separate process. A headless Blender runs worker.py — the
-# exact same import pipeline — and saves a .blend; the modal operator here
+# requires a separate process. A headless Blender runs worker.py (the
+# exact same import pipeline) and saves a .blend; the modal operator here
 # keeps the UI alive, shows progress, supports ESC-cancel and appends the
 # result when the worker finishes.
 
@@ -106,7 +106,7 @@ class STEPPER_OT_background_import(bpy.types.Operator):
     def execute(self, context):
         if STEPPER_OT_background_import._running:
             self.report({"WARNING"},
-                        "A background import is already running — "
+                        "A background import is already running; "
                         "wait for it to finish (or press Esc to cancel it)")
             return {"CANCELLED"}
         try:
@@ -260,7 +260,7 @@ class STEPPER_OT_background_import(bpy.types.Operator):
             self._cleanup(context)
             self.report({"ERROR"},
                         f"Background import failed: {error or f'worker exit {rc}'}"
-                        " — try disabling background import in preferences")
+                        " (try disabling background import in preferences)")
             return {"CANCELLED"}
 
         if done_blend is not None:
@@ -271,7 +271,7 @@ class STEPPER_OT_background_import(bpy.types.Operator):
                 self._cleanup(context)
                 self.report({"ERROR"}, f"Could not append result: {e}")
                 return {"CANCELLED"}
-            # Don't block the UI while the worker Blender shuts down —
+            # Don't block the UI while the worker Blender shuts down;
             # poll it on later timer ticks instead.
             if self._proc.poll() is None:
                 self._reap.append(self._proc)
@@ -308,7 +308,7 @@ class STEPPER_OT_background_import(bpy.types.Operator):
 
     def cancel(self, context):
         # Called by the window manager if the modal is force-terminated
-        # (file load, window closed, Blender quit) — without this the
+        # (file load, window closed, Blender quit); without this the
         # headless worker would keep running as an orphan.
         self._cleanup(context)
 

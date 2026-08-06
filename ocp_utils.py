@@ -26,7 +26,7 @@ class ShapeKey:
 
     OCP's TopoDS_Shape.__hash__ is content-based but __eq__ is wrapper
     identity, so two wrappers of the same shape hash alike yet compare
-    unequal — silently breaking every shape-keyed container.
+    unequal, silently breaking every shape-keyed container.
     """
 
     __slots__ = ("shape", "_h")

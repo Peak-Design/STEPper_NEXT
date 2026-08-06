@@ -565,12 +565,12 @@ class ReadSTEP:
 
         The link is a TDataStd_TreeNode with the XCAF MaterialRef GUID
         pointing at a material label. Read via the XCAFDoc_Material
-        attribute directly — the MaterialTool.GetMaterial_s out-parameters
+        attribute directly, because the MaterialTool.GetMaterial_s out-parameters
         are handle references that OCP's bindings cannot write back.
         Returns {"name", "description", "density"} or None.
         """
         # OCP wart: FindAttribute(guid, TDataStd_TreeNode) CRASHES (access
-        # violation in TKLCAF) when the attribute is absent — always check
+        # violation in TKLCAF) when the attribute is absent, so always check
         # IsAttribute first and only fetch on a confirmed hit.
         guid = XCAFDoc.MaterialRefGUID_s()
         if not label.IsAttribute(guid):
@@ -671,7 +671,7 @@ class ReadSTEP:
 
         print("DataExchange: Reading STEP")
 
-        # Single ReadFile — the XCAF reader wraps a STEPControl_Reader
+        # Single ReadFile: the XCAF reader wraps a STEPControl_Reader
         # that we can use for unit detection via ChangeReader().
         status = step_reader.ReadFile(self.filename)
         if status != IFSelect_RetDone:
@@ -743,7 +743,7 @@ class ReadSTEP:
 
         # Try transfer with default surface curve mode first (preserves more
         # geometry).  Only fall back to mode 0 (skip surface curves) when the
-        # transfer crashes — this can happen on files with unresolved refs.
+        # transfer crashes; this can happen on files with unresolved refs.
         # See: https://dev.opencascade.org/content/loading-step-file-crashes-edgeloop
         transfer_ok = False
         if has_data_failures:
@@ -890,7 +890,7 @@ class ReadSTEP:
                             new_leaf.color_override = (oc.Red(), oc.Green(), oc.Blue())
 
                         # Engineering material on the component reference
-                        # (rare — usually it sits on the referred product,
+                        # (rare; usually it sits on the referred product,
                         # picked up in the simple-shape branch below)
                         new_leaf.material = self.query_material(label)
 
@@ -1053,7 +1053,7 @@ class ReadSTEP:
             norms[t - 1] = nn
 
         # Normalize UVs, preserving aspect ratio (matches the native path's
-        # per-face normalization, including real-world mode — see
+        # per-face normalization, including real-world mode, see
         # _recompute_face_normals)
         if has_uvs:
             span = max(Umax - Umin, Vmax - Vmin)
@@ -1082,7 +1082,7 @@ class ReadSTEP:
 
         tri_data = []
         for t in tris:
-            # Degenerate triangles (repeated node index — collapsed seams,
+            # Degenerate triangles (repeated node index: collapsed seams,
             # corrupt geometry) would fail TriData's assertions and discard
             # the whole face; skip just the bad triangle instead, matching
             # the native path (which drops them in filter_zero_area).
@@ -1098,7 +1098,7 @@ class ReadSTEP:
         """Build per-shape recovery compounds for parts that failed to transfer.
 
         For each empty shape, we need to recover exactly the faces belonging
-        to that shape — not faces from other parts.  The approach:
+        to that shape, not faces from other parts.  The approach:
 
         1. Index all AdvancedFace entities by hash for hierarchy matching.
         2. Build a ProductDefinition → Representation mapping by navigating:
@@ -1148,8 +1148,8 @@ class ReadSTEP:
                 return
 
             # Which entities actually transferred?  OCP's per-entity lookup
-            # methods (MapIndex/IsBound/Find) are broken in 7.9.3.1 — they
-            # always miss and are ~250µs per call — so enumerate the mapped
+            # methods (MapIndex/IsBound/Find) are broken in 7.9.3.1: they
+            # always miss and are ~250µs per call, so enumerate the mapped
             # entities once and compare wrapper identity instead.
             mapped = [tp.Mapped(i) for i in range(1, tp.NbMapped() + 1)]
             mapped_ids = {id(m) for m in mapped}
@@ -1363,7 +1363,7 @@ class ReadSTEP:
         """Tessellate a shape, retrying with relaxed tolerances and shape
         healing if the first attempt produces no triangulation.
 
-        When skip_faulty is True, skip all healing/recovery retries — just
+        When skip_faulty is True, skip all healing/recovery retries, just
         tessellate once and return whatever we get.
         """
         def _has_triangulation(s):
@@ -1390,7 +1390,7 @@ class ReadSTEP:
             if _has_triangulation(healed):
                 print(f"\n  [healed] {part_name}", end="", flush=True)
                 return healed
-            # Healing changed the shape but it still won't mesh — give the
+            # Healing changed the shape but it still won't mesh, so give the
             # relaxed-tolerance retry a chance on the healed geometry.
             shp = healed
 
@@ -1418,7 +1418,7 @@ class ReadSTEP:
                     all_subs_empty = False
                     break
 
-        # If shape is empty and skip_faulty is on, skip entirely — no
+        # If shape is empty and skip_faulty is on, skip entirely: no
         # healing, no recovery compound, nothing that could produce corrupt
         # geometry and crash the native module.
         if all_subs_empty and skip_faulty:
@@ -1427,7 +1427,7 @@ class ReadSTEP:
             return out_mesh
 
         # Attempt per-face entity recovery for empty shapes (only when
-        # skip_faulty is off — recovery can produce corrupt triangulations)
+        # skip_faulty is off; recovery can produce corrupt triangulations)
         recovered_shape = None
         if all_subs_empty and not skip_faulty:
             recovered_shape = self._get_recovery_compound(shape)
@@ -1457,7 +1457,7 @@ class ReadSTEP:
                 col_rgb = b_RGB(col)
                 col_name = b_colorname(col)
             elif fallback_color is not None:
-                # Instance color override from the component reference label —
+                # Instance color override from the component reference label,
                 # applies where no face/sub-shape color is present.
                 col_rgb = fallback_color
                 col_name = Quantity_Color.StringName_s(
@@ -1598,7 +1598,7 @@ class ReadSTEP:
         # to match the proven v2.0.0 path.  The native C++ module and
         # facing.Normal() produce discrete triangulation normals that have
         # floating-point noise at OCC face boundaries, causing visible seams.
-        # Parallelized with threads — OCC SWIG releases the GIL.
+        # Parallelized with threads: OCC SWIG releases the GIL.
         _gp_res = gp.Resolution_s()
 
         def _recompute_face_normals(j):
@@ -1663,7 +1663,7 @@ class ReadSTEP:
             # the raw values were used for SetParameters above.
             # Default: fit to a 0-1 box.  World mode (uv_world_scale set):
             # scale so 1 UV unit == 1 scene unit, using the face's 3D extent
-            # as the reference — texel density then matches across parts.
+            # as the reference, so texel density then matches across parts.
             u_min = float(u_vals.min())
             v_min = float(v_vals.min())
             span = max(float(u_vals.max()) - u_min, float(v_vals.max()) - v_min)

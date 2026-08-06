@@ -122,7 +122,7 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
 
                 # Restore per-import UV options for the apply path.
                 # Older imports stored uv_surface/uv_unwrap/uv_box booleans
-                # instead of uv_mode — map them across.
+                # instead of uv_mode, so map them across.
                 uv_mode = stored.get("uv_mode")
                 if uv_mode is None:
                     if stored.get("uv_box"):
@@ -297,7 +297,7 @@ class STEPPER_OT_prune_restore(bpy.types.Operator):
         restored = 0
         # Worklist instead of a plain loop: a recreated empty can itself
         # carry restore metadata (cascade prunes record the deeper chain in
-        # the removed empty's props) — those must be restored in the same
+        # the removed empty's props); those must be restored in the same
         # run, not left for a second click.
         worklist = list(context.selected_objects)
         while worklist:
