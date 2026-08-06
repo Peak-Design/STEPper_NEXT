@@ -79,7 +79,9 @@ STEP files can carry the engineering material assigned in the source CAD system 
 
 The **Engineering Materials** import option (on by default) additionally gives each part a single Blender material named after the CAD material, e.g. `AISI 304 Steel`, instead of the color-derived ones. That pairs naturally with the Material Database above: map `AISI 304 Steel` to your authored steel shader once, and every future import picks it up.
 
-> **Not every CAD system exports this.** SOLIDWORKS does not write engineering material data into STEP at all, in any schema, and its "Export Appearances" option only carries flat per-face colours, since STEP has no representation for textures or PBR properties. CATIA and NX do export material data with the appropriate options enabled. Files without material data simply import without the custom properties.
+> **Not every CAD system exports this.** SOLIDWORKS does not write engineering material data into STEP at all, in any schema, and its "Export Appearances" option only carries flat per-face colours, since STEP has no representation for textures or PBR properties. It also flattens component and assembly level appearance overrides, so instances of the same part all come in with the part-level colour. CATIA and NX do export material data with the appropriate options enabled. Files without material data simply import without the custom properties.
+>
+> **Working in SOLIDWORKS?** Our free [NEXT-STEP](https://github.com/Peak-Design/NEXT-STEP-SW) add-in closes both gaps: it writes material name and density into the STEP file and preserves per-instance colour overrides, leaving the exported geometry identical to the native SOLIDWORKS output.
 
 ## UV Maps
 
@@ -138,6 +140,7 @@ Remove the extension from **Preferences > Get Extensions > Installed** (or Add-o
 
 | Version | Blender | Changes |
 |---------|---------|---------|
+| 2.4.6   | 5.1     | Fixed engineering materials always being created grey instead of keeping the part's imported colour |
 | 2.4.5   | 5.1     | Engineering material import (AP242/AP214 name, description, density) as custom properties and optional named materials; single `UVMap` layer with a UV mode dropdown, real-world UV scaling and automatic seams on closed/cylindrical faces; import options remembered between sessions; parented-empties imports now leave everything at scale 1; recursive folder batch import; multi-file drag & drop fix |
 | 2.4.4   | 5.1     | Code-review hardening: multi-level Prune/Restore, detail slider no longer overridden by the quality preset, batch import honours preference defaults, Regenerate/Reload fixed for IGES/BREP, background worker inherits preferences and cannot hang or outlive Blender, long CAD material names, edit-mode guards, tooltip and layout polish |
 | 2.4.3   | 5.1     | Non-blocking background import (worker process, live progress, Esc to cancel) with a size threshold; identical output to direct import |

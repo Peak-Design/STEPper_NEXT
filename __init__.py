@@ -71,13 +71,18 @@
 #     Normalize UVs now defaults to off (real-world UV scale); recursive
 #     folder batch import; multi-file drag & drop fixed (files list now
 #     uses OperatorFileListElement)
+#   - v2.4.6: fixed engineering materials always being created grey. The
+#     part's imported color was read from mat.diffuse_color (the viewport
+#     swatch), which the addon never writes, so it always came back as
+#     Blender's default 0.8 grey; it now reads the Principled BSDF's Base
+#     Color input, which is where add_material puts the CAD color
 
 bl_info = {
     "name": "STEPper NEXT",
     "author": "ambi, Peak-Design",
     "description": "STEP OpenCASCADE import",
     "blender": (5, 1, 0),
-    "version": (2, 4, 5),
+    "version": (2, 4, 6),
     "location": "3D View > Tools panel > STEPper NEXT",
     "category": "Import",
 }

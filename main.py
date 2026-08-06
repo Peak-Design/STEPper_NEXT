@@ -2260,9 +2260,9 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
     eng_materials: bpy.props.BoolProperty(
         name="Engineering Materials",
         description="When the STEP file carries engineering material "
-                    "metadata (AP242/AP214, e.g. exported from CATIA or "
-                    "NX; SOLIDWORKS does not export it), assign each part "
-                    "ONE Blender material named after it (\"AISI 304 "
+                    "metadata (AP242/AP214, e.g. from CATIA or NX, or from "
+                    "SOLIDWORKS via our free NEXT-STEP add-in), assign each "
+                    "part ONE Blender material named after it (\"AISI 304 "
                     "Steel\") instead of color-based materials. Density and "
                     "description are stored as custom properties; pairs "
                     "well with the Material Database for mapping to full "
