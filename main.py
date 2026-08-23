@@ -44,6 +44,23 @@ from . import analyzer as analyzer_mod
 from . import background as background_mod
 from .formats import classes as formats_classes
 
+# The rig subpackage (SW To Blender: armature from a .rig.json manifest) is
+# developed in-tree but must never take the importer down with it — a broken
+# rig module costs the rig panel, not STEP import.
+try:
+    from . import rig as rig_mod
+except Exception as _rig_exc:
+    rig_mod = None
+    print("STEPper NEXT: rig subpackage failed to load:", _rig_exc)
+
+# Same isolation for the SolidWorks bridge: a bridge fault must never cost
+# STEP import.
+try:
+    from . import bridge as bridge_mod
+except Exception as _bridge_exc:
+    bridge_mod = None
+    print("STEPper NEXT: bridge module failed to load:", _bridge_exc)
+
 # Active UV options for the current import (set by load_step)
 # Per-import UV generation state (a single "UVMap" layer; the booleans are
 # derived from the operator's uv_mode enum in load_step)
@@ -64,19 +81,43 @@ def _quantize_color(col):
     return tuple(round(c * _COLOR_MERGE_PRECISION) / _COLOR_MERGE_PRECISION for c in col)
 
 
+# Freshness stamp per cached path. The cache used to key on path alone,
+# which served YESTERDAY'S geometry whenever a file was re-exported to the
+# same path (SW To Blender's send-to-Blender loop does exactly that; found
+# live 2026-08-23 — a re-posed assembly kept importing at the old pose).
+global_file_cache_meta = {}
+
+
+def _file_signature(filepath):
+    try:
+        st = os.stat(filepath)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _cache_put(filepath, step_reader):
     """Add to file cache with LRU eviction."""
     if filepath in global_file_cache:
         global_file_cache.move_to_end(filepath)
     global_file_cache[filepath] = step_reader
+    global_file_cache_meta[filepath] = _file_signature(filepath)
     while len(global_file_cache) > MAX_FILE_CACHE:
         evicted_path, _ = global_file_cache.popitem(last=False)
+        global_file_cache_meta.pop(evicted_path, None)
         print(f"Cache evicted: {os.path.basename(evicted_path)}")
 
 
 def _cache_get(filepath):
-    """Get from file cache, updating LRU order. Returns None if not found."""
+    """Get from file cache, updating LRU order. Returns None if not found
+    or if the file on disk changed since it was cached."""
     if filepath in global_file_cache:
+        sig = _file_signature(filepath)
+        if sig is None or sig != global_file_cache_meta.get(filepath):
+            del global_file_cache[filepath]
+            global_file_cache_meta.pop(filepath, None)
+            print(f"Cache stale (file changed on disk): {os.path.basename(filepath)}")
+            return None
         global_file_cache.move_to_end(filepath)
         return global_file_cache[filepath]
     return None
@@ -3244,6 +3285,25 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
                 "Annotations,Planes,Origin",
     )
 
+    def _enable_bridge_changed(self, context):
+        if bridge_mod is None:
+            return
+        try:
+            if self.enable_bridge:
+                bridge_mod.start()
+            else:
+                bridge_mod.stop()
+        except Exception as exc:
+            print("STEPper NEXT: bridge toggle failed:", exc)
+
+    enable_bridge: bpy.props.BoolProperty(
+        name="SolidWorks bridge",
+        description="Listen on localhost so the SW To Blender add-in can "
+                    "send exports straight into this Blender instance",
+        default=True,
+        update=_enable_bridge_changed,
+    )
+
     def draw(self, context):
         layout = self.layout
 
@@ -3295,6 +3355,12 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         if self.background_import:
             col.prop(self, "background_min_mb")
 
+        col = layout.box().column(align=True)
+        col.prop(self, "enable_bridge")
+        if bridge_mod is not None and bridge_mod.is_running():
+            col.label(text="Listening on 127.0.0.1:%d" % bridge_mod.port(),
+                      icon="CHECKMARK")
+
 
 def menu_func_import(self, context):
     self.layout.operator(ImportStepCADOperator.bl_idname, text="STEP/IGES/BREP CAD [STEPper NEXT]")
@@ -3333,9 +3399,29 @@ def register():
         bpy.utils.register_class(c)
     bpy.types.Scene.stepper = bpy.props.PointerProperty(type=PG_Stepper)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+    if rig_mod is not None:
+        try:
+            rig_mod.register()
+        except Exception as exc:
+            print("STEPper NEXT: rig registration failed:", exc)
+    if bridge_mod is not None:
+        try:
+            bridge_mod.register()
+        except Exception as exc:
+            print("STEPper NEXT: bridge registration failed:", exc)
 
 
 def unregister():
+    if bridge_mod is not None:
+        try:
+            bridge_mod.unregister()
+        except Exception as exc:
+            print("STEPper NEXT: bridge unregistration failed:", exc)
+    if rig_mod is not None:
+        try:
+            rig_mod.unregister()
+        except Exception as exc:
+            print("STEPper NEXT: rig unregistration failed:", exc)
     for c in classes[::-1]:
         bpy.utils.unregister_class(c)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
