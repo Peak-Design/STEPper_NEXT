@@ -180,9 +180,9 @@ The check sends no information about you or your files, and runs on a background
 
 This addon is free and open source under the GPL v3 license.
 
-**ambi** — original creator: https://ambient.gumroad.com/l/stepper
+**ambi**, original creator: https://ambient.gumroad.com/l/stepper
 
-**Peak Design** — current maintainer. Tips welcome:
+**Peak Design**, current maintainer. Tips welcome:
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/oskarasspalvys)
 
