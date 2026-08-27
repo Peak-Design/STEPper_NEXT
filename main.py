@@ -42,6 +42,7 @@ from . import tools as tools_mod
 from . import curves as curves_mod
 from . import analyzer as analyzer_mod
 from . import background as background_mod
+from . import updater as updater_mod
 from .formats import classes as formats_classes
 
 # Active UV options for the current import (set by load_step)
@@ -3003,6 +3004,35 @@ class STEP_PT_MaterialDB(bpy.types.Panel):
             row.prop(stepper, "mat_db_apply_selection_only")
 
 
+class STEP_PT_STEPper_Info(bpy.types.Panel):
+    """Version line at the top of the tab, with the update notice."""
+    bl_label = "STEPper NEXT: Info"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "STEPper NEXT"
+    bl_options = {"HIDE_HEADER"}
+    bl_order = 0
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.label(text="STEPper NEXT v%s" % updater_mod.version_string(),
+                  icon="TOOL_SETTINGS")
+        # The tip jar: a heart, deliberately unlabelled so the version line
+        # stays readable at narrow sidebar widths.
+        row.operator("wm.url_open", text="",
+                     icon="FUND").url = updater_mod.KOFI_URL
+
+        update = updater_mod.available_update()
+        if update:
+            box = layout.box().column(align=True)
+            box.label(text="Version %s is available" % update["version"],
+                      icon="INFO")
+            box.operator("wm.url_open", icon="IMPORT",
+                         text="Download %s" % update["version"]).url =                 update["url"]
+            box.label(text="Install the zip as usual to update.")
+
+
 class STEP_PT_STEPper(bpy.types.Panel):
     bl_label = "STEPper NEXT: Tools"
     bl_space_type = "VIEW_3D"
@@ -3236,6 +3266,37 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         default="{}",
     )
 
+    check_for_updates: bpy.props.BoolProperty(
+        name="Check for updates",
+        description="Once a day, ask GitHub whether a newer STEPper NEXT "
+                    "release exists and show a notice in the sidebar. No "
+                    "information about you or your files is sent",
+        default=True,
+    )
+
+    update_last_check: bpy.props.StringProperty(
+        name="Last update check",
+        description="Date of the last update check (managed automatically)",
+        default="",
+        options={"HIDDEN"},
+    )
+
+    update_latest_tag: bpy.props.StringProperty(
+        name="Latest release tag",
+        description="Newest release tag seen on GitHub (managed "
+                    "automatically)",
+        default="",
+        options={"HIDDEN"},
+    )
+
+    update_latest_url: bpy.props.StringProperty(
+        name="Latest release download",
+        description="Download URL for the newest release (managed "
+                    "automatically)",
+        default="",
+        options={"HIDDEN"},
+    )
+
     construction_filter_names: bpy.props.StringProperty(
         name="Construction name filters",
         description="Comma-separated name prefixes skipped when "
@@ -3295,6 +3356,22 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
         if self.background_import:
             col.prop(self, "background_min_mb")
 
+        col = layout.box().column(align=True)
+        col.prop(self, "check_for_updates")
+        update = updater_mod.available_update(self)
+        if update:
+            row = col.row()
+            row.alert = True
+            row.label(text="Version %s is available" % update["version"],
+                      icon="INFO")
+            col.operator("wm.url_open", icon="URL",
+                         text="Download %s" % update["version"]).url =                 update["url"]
+        else:
+            col.label(text="STEPper NEXT %s is up to date"
+                           % updater_mod.version_string(), icon="CHECKMARK")
+        col.operator("wm.url_open", icon="FUND",
+                     text="Support development on Ko-fi").url =             updater_mod.KOFI_URL
+
 
 def menu_func_import(self, context):
     self.layout.operator(ImportStepCADOperator.bl_idname, text="STEP/IGES/BREP CAD [STEPper NEXT]")
@@ -3319,6 +3396,7 @@ classes = (
     STEP_OT_MatDBDelete,
     STEP_OT_MatDBApply,
     STEP_UL_MaterialMappings,
+    STEP_PT_STEPper_Info,
     STEP_PT_STEPper,
     STEP_PT_STEPper_Reload,
     STEP_PT_MaterialDB,
@@ -3333,9 +3411,11 @@ def register():
         bpy.utils.register_class(c)
     bpy.types.Scene.stepper = bpy.props.PointerProperty(type=PG_Stepper)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+    updater_mod.start()
 
 
 def unregister():
+    updater_mod.stop()
     for c in classes[::-1]:
         bpy.utils.unregister_class(c)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)

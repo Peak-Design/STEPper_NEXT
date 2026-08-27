@@ -151,6 +151,12 @@ A single `UVMap` layer is created; the **UV Map** import option chooses its cont
 
 With **Remember import settings** enabled in the addon preferences (the default), the import dialog's options are saved after every import and restored in your next Blender session, so you configure them once. They are written out with Blender's normal preferences save, so keep *Save Preferences on Quit* on (Blender's default) or save preferences manually. Turn the option off to fall back to the fixed defaults in the preferences instead.
 
+## Staying Up To Date
+
+STEPper NEXT is installed from a zip rather than from extensions.blender.org (it ships precompiled binaries), so Blender does not update it for you. Instead the addon asks GitHub once a day whether a newer release exists and, if there is one, shows a notice at the top of the **STEPper NEXT** sidebar tab with a download link for your platform. Install the downloaded zip the same way as the first time and Blender replaces the old version.
+
+The check sends no information about you or your files, and runs on a background thread so it never delays startup. Turn it off with **Check for updates** in the addon preferences.
+
 ## Version History
 
 | Version | Blender | Changes |
