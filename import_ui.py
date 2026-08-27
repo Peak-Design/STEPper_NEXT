@@ -232,8 +232,8 @@ class STEPPER_FH_step(bpy.types.FileHandler):
 
 
 class STEPPER_OT_batch_import_folder(bpy.types.Operator):
-    """Import every STEP/IGES/BREP file in a folder, each into its own
-    collection, using the quality/scene defaults from the addon preferences"""
+    """Import every STEP, IGES and BREP file in a folder. Each file goes into its
+    own collection. The addon uses the defaults from the preferences."""
     bl_idname = "stepper.batch_import_folder"
     bl_label = "Batch Import Folder"
     bl_options = {"REGISTER", "UNDO"}

@@ -24,10 +24,10 @@ Originally created by **ambi** (Tommi Hyppanen). Now maintained by
 **Geometry**
 
 - Direct STEP, IGES and BREP import via OpenCASCADE
-- Analytic surface normals for smooth, seamless shading on curved surfaces
+- Analytic surface normals give smooth shading across curved surfaces
 - Sharp edges marked from the CAD topology, with custom split normals
 - Quality presets with unit-aware deflection (a physical 0.8 mm stays 0.8 mm whatever units the file uses), plus relative (adaptive) tessellation
-- Robust handling of corrupted geometry: imports everything it can instead of skipping whole parts, with ShapeFix healing for damaged shapes
+- Corrupted geometry: the addon imports what it can instead of skipping a whole part, and repairs damaged shapes with ShapeFix
 - Free edges and sketches optionally imported as curve objects
 
 **Materials & UVs**
@@ -54,7 +54,7 @@ STEPper NEXT ships as a Blender **extension** (since v2.3.0). The OpenCASCADE
 
 1. Download the `.zip` for your platform from the [Releases](../../releases) page.
 2. Drag & drop the `.zip` into a Blender window (or use **Edit > Preferences > Get Extensions >** drop-down menu **> Install from Disk...**).
-3. Enable it under **Add-ons** if it isn't enabled automatically.
+3. Enable it under **Add-ons** if Blender does not enable it for you.
 
 The importer panel will appear in **3D View > Tools panel > STEPper NEXT**.
 
@@ -126,15 +126,15 @@ Each row shows an original STEP material name and a dropdown to pick the replace
 
 STEP files can carry the engineering material assigned in the source CAD system (name, description and density) alongside the geometry. Every import stores whatever it finds on each object as `STEP_material`, `STEP_material_desc` and `STEP_material_density` custom properties.
 
-The **Engineering Materials** import option (on by default) additionally gives each part a single Blender material named after the CAD material, e.g. `AISI 304 Steel`, instead of the color-derived ones. That pairs naturally with the Material Database above: map `AISI 304 Steel` to your authored steel shader once, and every future import picks it up.
+The **Engineering Materials** import option is on by default. It gives each part one Blender material named after the CAD material, such as `AISI 304 Steel`, instead of the color materials. This works with the Material Database above. Map `AISI 304 Steel` to your own steel shader once, and every later import uses it.
 
-> **Not every CAD system exports this.** SOLIDWORKS does not write engineering material data into STEP at all, in any schema, and its "Export Appearances" option only carries flat per-face colours, since STEP has no representation for textures or PBR properties. It also flattens component and assembly level appearance overrides, so instances of the same part all come in with the part-level colour. CATIA and NX do export material data with the appropriate options enabled. Files without material data simply import without the custom properties.
+> **Not every CAD system writes this data.** SOLIDWORKS does not write engineering material data into STEP in any schema. Its "Export Appearances" option carries only flat per face colors, because STEP cannot hold textures or PBR properties. SOLIDWORKS also flattens the appearance overrides on components and assemblies, so every instance of a part arrives with the part color. CATIA and NX do write material data when you turn on the right export options. A file without material data imports without the custom properties.
 >
-> **Working in SOLIDWORKS?** Our free [NEXT-STEP](https://github.com/Peak-Design/NEXT-STEP-SW) add-in closes both gaps: it writes material name and density into the STEP file and preserves per-instance colour overrides, leaving the exported geometry identical to the native SOLIDWORKS output.
+> **Do you work in SOLIDWORKS?** Our free [NEXT-STEP](https://github.com/Peak-Design/NEXT-STEP-SW) add-in closes both gaps. It writes the material name and the density into the STEP file. It also keeps the color override on each instance. The geometry stays identical to the native SOLIDWORKS output.
 
 ## UV Maps
 
-A single `UVMap` layer is created; the **UV Map** import option chooses its content.
+The addon creates one `UVMap` layer. The **UV Map** import option chooses what goes into it.
 
 | Mode | Description |
 |------|-------------|
@@ -143,17 +143,17 @@ A single `UVMap` layer is created; the **UV Map** import option chooses its cont
 | **Box Project** | Triplanar projection with a world-unit tile size. |
 | **None** | No UV layer. |
 
-**Normalize UVs** (off by default) fits the UVs to the 0-1 square. With it off, UVs are scaled to real-world scene units instead (islands stay packed and are uniformly rescaled), so one shared material shows its texture at the same physical scale on every part, which is usually what you want for CAD.
+**Normalize UVs** is off by default. When it is on, the addon fits the UVs to the 0-1 square. When it is off, the addon scales the UVs to real world scene units instead. The islands stay packed and the addon rescales them together. One shared material then shows its texture at the same physical size on every part. This is what most CAD work needs.
 
-**Split Closed Faces** (on by default) marks a UV seam along the parametric closure of cylinders, cones and tori, and across smooth-joined face groups that form closed tubes or rings. CAD data has no seam there, and unwrapping without one produces badly distorted islands. Shading is unaffected.
+**Split Closed Faces** is on by default. It marks a UV seam along the closure of cylinders, cones and tori. It also marks one across smooth joined face groups that form closed tubes or rings. CAD data has no seam in these places, and an unwrap without one gives badly distorted islands. This does not change the shading.
 
 ## Import Defaults
 
-With **Remember import settings** enabled in the addon preferences (the default), the import dialog's options are saved after every import and restored in your next Blender session, so you configure them once. They are written out with Blender's normal preferences save, so keep *Save Preferences on Quit* on (Blender's default) or save preferences manually. Turn the option off to fall back to the fixed defaults in the preferences instead.
+**Remember import settings** is on by default. The addon saves the import dialog options after every import and restores them in your next Blender session. Blender writes them out with its normal preferences save, so keep *Save Preferences on Quit* on. You can also save the preferences by hand. Turn the option off to use the fixed defaults in the preferences instead.
 
 ## Staying Up To Date
 
-STEPper NEXT is installed from a zip rather than from extensions.blender.org (it ships precompiled binaries), so Blender does not update it for you. Instead the addon asks GitHub once a day whether a newer release exists and, if there is one, shows a notice at the top of the **STEPper NEXT** sidebar tab with a download link for your platform. Install the downloaded zip the same way as the first time and Blender replaces the old version.
+You install STEPper NEXT from a zip and not from extensions.blender.org, because it ships precompiled binaries. Blender therefore does not update it for you. The addon asks GitHub once a day whether a newer release exists. If there is one, it shows a notice at the top of the **STEPper NEXT** sidebar tab. The notice has a download link for your platform. Install the downloaded zip the same way as the first time, and Blender replaces the old version.
 
 The check sends no information about you or your files, and runs on a background thread so it never delays startup. Turn it off with **Check for updates** in the addon preferences.
 
@@ -188,13 +188,13 @@ This addon is free and open source under the GPL v3 license.
 
 ## For Developers
 
-The OpenCASCADE (OCP) bindings come from the [cadquery-ocp-novtk](https://pypi.org/project/cadquery-ocp-novtk/) wheels committed in `wheels/` (one per platform, referenced by `blender_manifest.toml`; Blender installs the matching one at extension install time). A small native mesh-extraction module (`native/`) ships per platform with its own plain-named OCCT subset in `native_libs/`; it talks to the importer via a BinTools serialize handoff, so it is independent of the Python bindings. Per-platform extension zips are built by GitHub Actions (`.github/workflows/release.yml`), which narrows the manifest to one platform/wheel per zip via `ci/make_platform_manifest.py` and runs `ci/smoke_test.py` before packaging.
+The OpenCASCADE (OCP) bindings come from the [cadquery-ocp-novtk](https://pypi.org/project/cadquery-ocp-novtk/) wheels in `wheels/`, one per platform. `blender_manifest.toml` lists them, and Blender installs the matching one at extension install time. A small native mesh extraction module (`native/`) ships per platform with its own plain named OCCT subset in `native_libs/`. It talks to the importer through a BinTools serialize handoff, so it does not depend on the Python bindings. GitHub Actions builds the per platform extension zips with `.github/workflows/release.yml`. The workflow narrows the manifest to one platform and wheel per zip with `ci/make_platform_manifest.py`, then runs `ci/smoke_test.py` before it packages the addon.
 
-For development in `scripts/addons` (legacy addon path, still supported via the retained `bl_info`): extract the Windows wheel into the addon folder so `import OCP` resolves: `python -m zipfile -e wheels/cadquery_ocp_novtk-*-win_amd64.whl .` (the extracted `OCP/` + `cadquery_ocp_novtk.libs/` folders are gitignored).
+The legacy addon path in `scripts/addons` still works through the retained `bl_info`. Extract the Windows wheel into the addon folder so `import OCP` resolves: `python -m zipfile -e wheels/cadquery_ocp_novtk-*-win_amd64.whl .`. The extracted `OCP/` and `cadquery_ocp_novtk.libs/` folders are gitignored.
 
-Parity testing: `blender -b --factory-startup --python ci/parity_harness.py -- <file.step> <out.json> ['<operator_kwargs_json>']` dumps a deterministic scene snapshot (objects, mesh counts, materials, transforms, collections) for diffing. Reference snapshots live in `ci/baselines/`, together with the self-contained `mat_ap242.step` / `mat_ap214.step` fixtures used to test engineering-material import; the other baselines reference local corpus files by absolute path and are meant as a change detector rather than a portable test suite.
+Parity testing: `blender -b --factory-startup --python ci/parity_harness.py -- <file.step> <out.json> ['<operator_kwargs_json>']` writes a deterministic scene snapshot for diffing. The snapshot holds objects, mesh counts, materials, transforms and collections. Reference snapshots live in `ci/baselines/`, with the self contained `mat_ap242.step` and `mat_ap214.step` fixtures that test engineering material import. The other baselines point at local corpus files by absolute path. Treat those as a change detector and not as a portable test suite.
 
-Note: on Windows the addon/extension must not live under a path longer than ~250 characters, or the bundled OpenCASCADE DLLs will fail to load (default Blender paths are fine).
+Note: on Windows the addon must not sit under a path longer than about 250 characters. The bundled OpenCASCADE DLLs fail to load if it does. The default Blender paths are fine.
 
 ## License
 

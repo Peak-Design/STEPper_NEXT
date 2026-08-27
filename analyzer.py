@@ -96,8 +96,8 @@ def estimate_times(scan, prefs):
 
 
 class STEPPER_OT_analyze_file(bpy.types.Operator):
-    """Analyze a STEP file before importing: entity counts, units and
-    estimated import times (no geometry is loaded)"""
+    """Analyze a STEP file before you import it. The report shows entity counts,
+    units and estimated import times. This does not load any geometry."""
     bl_idname = "stepper.analyze_file"
     bl_label = "Analyze STEP File"
 

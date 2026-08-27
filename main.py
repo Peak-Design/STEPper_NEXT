@@ -2139,14 +2139,13 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
         ],
         name="Tree hierarchy",
         default="EMPTIES",
-        description="How the imported assembly structure is organized in "
-                    "the scene",
+        description="How the addon organizes the imported assembly in the scene",
     )
 
     user_scale: bpy.props.FloatProperty(
         name="Scale",
-        description="Scale factor used instead of the unit information in "
-                    "the file (only used when Custom Scale is enabled)",
+        description="Scale factor to use instead of the unit information in the"
+                    " file. This applies only when Custom scale is on",
         default=0.01, min=0.00001)
 
     lin_deflection: bpy.props.FloatProperty(
@@ -2178,7 +2177,8 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     custom_scale: bpy.props.BoolProperty(
         name="Custom scale",
-        description="Instead of loading the unit information from the file, determine it manually",
+        description="Set the unit scale by hand instead of reading it from the "
+                    "file",
         default=False,
     )
 
@@ -2191,7 +2191,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
     material_database: bpy.props.EnumProperty(
         items=_matdb_enum_items,
         name="Material Database",
-        description="Replace STEP materials using a material database",
+        description="Replace the STEP materials with materials from a database",
     )
 
     quality_preset: bpy.props.EnumProperty(
@@ -2243,40 +2243,39 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
              "Triplanar box projection with a world-unit tile size", 3),
         ],
         name="UV Map",
-        description="How the imported 'UVMap' layer is generated",
+        description="How the addon fills the UVMap layer",
         default="SURFACE",
     )
 
     uv_normalize: bpy.props.BoolProperty(
         name="Normalize UVs",
-        description="Fit UVs to the 0-1 square (per CAD face in Surface "
-                    "mode, packed per mesh in Unwrap mode). Disable to "
-                    "scale UVs to real-world scene units instead (packed "
-                    "islands are kept and uniformly rescaled), so a shared "
-                    "material shows textures at the same physical scale on "
+        description="Fit the UVs to the 0-1 square. CAD Surface mode fits each "
+                    "CAD face. Unwrap mode packs the whole mesh. Turn this off "
+                    "to scale the UVs to real world scene units instead. The "
+                    "islands stay packed and the addon rescales them together. "
+                    "One material then shows a texture at the same size on "
                     "every part",
         default=False,
     )
 
     eng_materials: bpy.props.BoolProperty(
         name="Engineering Materials",
-        description="When the STEP file carries engineering material "
-                    "metadata (AP242/AP214, e.g. from CATIA or NX, or from "
-                    "SOLIDWORKS via our free NEXT-STEP add-in), assign each "
-                    "part ONE Blender material named after it (\"AISI 304 "
-                    "Steel\") instead of color-based materials. Density and "
-                    "description are stored as custom properties; pairs "
-                    "well with the Material Database for mapping to full "
-                    "shaders",
+        description="Give each part one Blender material named after its CAD "
+                    "material, such as \"AISI 304 Steel\", instead of color "
+                    "materials. The STEP file must carry engineering material "
+                    "data. CATIA and NX write it. SOLIDWORKS writes it only "
+                    "through the free NEXT-STEP add-in. The addon stores the "
+                    "density and the description as custom properties. Use the "
+                    "Material Database to map each name to a full shader",
         default=True,
     )
 
     uv_split_closed: bpy.props.BoolProperty(
         name="Split Closed Faces",
-        description="Mark a UV seam along the parametric closure of "
-                    "cylindrical and other closed surfaces so unwrapping "
-                    "can flatten them (CAD data has no seam there). Does "
-                    "not affect shading",
+        description="Mark a UV seam along the closure of cylinders and other "
+                    "closed surfaces. CAD data has no seam there, so the unwrap"
+                    " cannot flatten these faces without one. This does not "
+                    "change the shading",
         default=True,
     )
 
@@ -2297,9 +2296,9 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 
     tessellation_relative: bpy.props.BoolProperty(
         name="Relative tessellation",
-        description="Scale deflection with each feature's size: small parts "
-                    "keep detail, large parts don't explode triangle counts. "
-                    "Also enables parallel meshing",
+        description="Scale the deflection with the size of each feature. Small "
+                    "parts keep their detail and large parts do not explode the"
+                    " triangle count. This also turns on parallel meshing",
         default=False,
     )
 
@@ -2445,7 +2444,7 @@ class ImportStepCADOperator(bpy.types.Operator, ImportHelper):
 class STEP_OT_ClearCache(bpy.types.Operator):
     bl_idname = "object.occ_clear_cache"
     bl_label = "Clear STEP cache"
-    bl_description = "Clear STEP cache, enabling the reload of a file"
+    bl_description = "Clear the STEP cache so the next import reads the file again"
 
     def execute(self, context):
         # utils.memorytrace_print()
@@ -2464,9 +2463,10 @@ class STEP_OT_FixASCII(bpy.types.Operator):
     bl_idname = "object.occ_fix_ascii"
     bl_label = "Attempt STEP ASCII fix"
     bl_description = (
-        "Attempt repairing invalid STEP characters.\n"
-        "For files that crash the program when trying to load.\n"
-        "A new file with _fix post-fix is created into the folder."
+        "Repair invalid characters in a STEP file.\n"
+        "Use this for files that crash Blender on import.\n"
+        "The addon writes a new file with the _fix suffix\n"
+        "beside the original."
     )
 
     def execute(self, context):
@@ -2564,7 +2564,10 @@ class STEP_OT_ReloadSTEP(bpy.types.Operator):
 class STEP_OT_ClearFileCache(bpy.types.Operator):
     bl_idname = "object.occ_clear_file_cache"
     bl_label = "Clear this file from cache"
-    bl_description = "Remove the selected object's STEP file from cache (next import re-reads from disk)"
+    bl_description = (
+        "Remove the STEP file of the selected object from the cache. The next "
+        "import reads it from disk again"
+    )
 
     @classmethod
     def poll(cls, context):
@@ -2583,10 +2586,11 @@ class STEP_OT_ClearFileCache(bpy.types.Operator):
 class STEP_OT_RebuildSelected(bpy.types.Operator):
     bl_idname = "object.occ_rebuild_selected"
     bl_label = "Rebuild selected objects from the STEP file"
-    bl_description = ("Rebuild selected objects from the STEP file.\n"
-                      "Legacy tool: prefer 'Regenerate Selected' in the "
-                      "Tools panel.\nExperimental: causes issues on some "
-                      "shapes")
+    bl_description = ((
+        "Rebuild the selected objects from the STEP file. This old tool is "
+        "experimental and fails on some shapes. Use Regenerate Selected in the "
+        "Tools panel instead"
+    ))
 
     @classmethod
     def poll(cls, context):
@@ -3172,13 +3176,14 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
 
     simpler_parameters: bpy.props.BoolProperty(
         name="Artist friendly parameters",
-        description="Instead of linear and angle deflection values, use only detail setting",
+        description="Show one detail slider instead of the linear and angular "
+                    "deflection values",
         default=True,
     )
 
     skip_empty_objects: bpy.props.BoolProperty(
         name="Skip empty objects",
-        description="Don't create objects for parts that produce no geometry",
+        description="Do not create objects for parts that produce no geometry",
         default=True,
     )
 
@@ -3197,16 +3202,15 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
     remember_import_settings: bpy.props.BoolProperty(
         name="Remember import settings",
         description="Save the import dialog options after every import and "
-                    "restore them in the next Blender session (needs "
-                    "'Save Preferences on Quit' or a manual preferences "
-                    "save). When disabled, the dialog starts from the "
-                    "defaults below instead",
+                    "restore them in the next Blender session. This needs Save "
+                    "Preferences on Quit, or a manual preferences save. Turn "
+                    "this off to start from the defaults below instead",
         default=True,
     )
 
     last_import_settings: bpy.props.StringProperty(
         name="Last import settings",
-        description="Last-used import dialog options (managed automatically)",
+        description="Options from the last import (the addon manages this)",
         default="",
         options={"HIDDEN"},
     )
@@ -3253,54 +3257,53 @@ class STEP_AddonPreferences(bpy.types.AddonPreferences):
 
     background_min_mb: bpy.props.FloatProperty(
         name="Background threshold (MB)",
-        description="Files smaller than this import synchronously "
-                    "(background startup overhead isn't worth it)",
+        description="Import files smaller than this directly. The background "
+                    "process takes too long to start to be worth it for them",
         default=2.0,
         min=0.0,
     )
 
     perf_calibration: bpy.props.StringProperty(
         name="Performance calibration",
-        description="Per-machine import speed data used by the analyzer "
-                    "(managed automatically)",
+        description="Import speed measured on this machine, used by the "
+                    "analyzer (the addon manages this)",
         default="{}",
     )
 
     check_for_updates: bpy.props.BoolProperty(
         name="Check for updates",
-        description="Once a day, ask GitHub whether a newer STEPper NEXT "
-                    "release exists and show a notice in the sidebar. No "
-                    "information about you or your files is sent",
+        description="Ask GitHub once a day if a newer release exists, and show "
+                    "a notice in the sidebar. The addon sends no information "
+                    "about you or your files",
         default=True,
     )
 
     update_last_check: bpy.props.StringProperty(
         name="Last update check",
-        description="Date of the last update check (managed automatically)",
+        description="Date of the last update check (the addon manages this)",
         default="",
         options={"HIDDEN"},
     )
 
     update_latest_tag: bpy.props.StringProperty(
         name="Latest release tag",
-        description="Newest release tag seen on GitHub (managed "
-                    "automatically)",
+        description="Newest release tag seen on GitHub (the addon manages this)",
         default="",
         options={"HIDDEN"},
     )
 
     update_latest_url: bpy.props.StringProperty(
         name="Latest release download",
-        description="Download URL for the newest release (managed "
-                    "automatically)",
+        description="Download address for the newest release (the addon manages"
+                    " this)",
         default="",
         options={"HIDDEN"},
     )
 
     construction_filter_names: bpy.props.StringProperty(
         name="Construction name filters",
-        description="Comma-separated name prefixes skipped when "
-                    "'Skip construction geometry' is enabled on import",
+        description="Comma separated name prefixes to skip when Skip "
+                    "construction geometry is on",
         default="Axes,Sketches,Lines,Hatches,Wires,Curves,Construction,"
                 "Annotations,Planes,Origin",
     )

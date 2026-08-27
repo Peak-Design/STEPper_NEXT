@@ -24,19 +24,18 @@ def _scale_mesh_verts(me, factor):
 
 
 class STEPPER_OT_regenerate(bpy.types.Operator):
-    """Re-tessellate selected objects from their source STEP file.
-
-    Only the mesh data is replaced: transforms, parenting, modifiers,
-    materials database assignments, animation and custom properties survive.
-    """
+    """Tessellate the selected objects again from their source STEP file. The
+    addon replaces only the mesh data. Transforms, parenting, modifiers,
+    material database assignments, animation and custom properties all survive."""
     bl_idname = "stepper.regenerate"
     bl_label = "Regenerate Selected from STEP"
     bl_options = {"REGISTER", "UNDO"}
 
     use_scene_settings: bpy.props.BoolProperty(
         name="Use STEPper Panel Resolution",
-        description="Use the resolution values from the STEPper N-panel; "
-                    "otherwise each object's original import settings are used",
+        description="Use the resolution values from the STEPper panel. Turn "
+                    "this off to use the original import settings of each "
+                    "object",
         default=True,
     )
 
@@ -206,12 +205,10 @@ class STEPPER_OT_regenerate(bpy.types.Operator):
 
 
 class STEPPER_OT_prune_hierarchy(bpy.types.Operator):
-    """Collapse chains of single-child empties in the imported hierarchy.
-    Operates on all objects imported from the same file(s) as the selection.
-
-    Removed levels are recorded on the surviving children so the hierarchy
-    can be restored with 'Restore Pruned Hierarchy'.
-    """
+    """Collapse chains of single child empties in the imported hierarchy. This
+    works on every object imported from the same files as the selection. The
+    addon records the removed levels on the children that stay. Restore Pruned
+    Hierarchy puts them back."""
     bl_idname = "stepper.prune_hierarchy"
     bl_label = "Prune Hierarchy"
     bl_options = {"REGISTER", "UNDO"}
@@ -344,9 +341,9 @@ class STEPPER_OT_prune_restore(bpy.types.Operator):
 
 
 class STEPPER_OT_mesh_cleanup(bpy.types.Operator):
-    """Merge close vertices and dissolve coplanar faces while preserving
-    sharp edges. Note: replaces the imported custom normals with sharp-edge
-    based shading on the affected meshes."""
+    """Merge close vertices and dissolve coplanar faces, but keep the sharp edges.
+    This replaces the imported custom normals with shading from the sharp
+    edges."""
     bl_idname = "stepper.mesh_cleanup"
     bl_label = "Cleanup selected meshes"
     bl_options = {"REGISTER", "UNDO"}
@@ -420,8 +417,8 @@ class STEPPER_OT_mesh_cleanup(bpy.types.Operator):
 
 
 class STEPPER_OT_add_box_uv(bpy.types.Operator):
-    """Box-project the 'UVMap' layer of the selected meshes (triplanar,
-    world-unit tile size); creates the layer if missing"""
+    """Box project the UVMap layer of the selected meshes with a world unit tile
+    size. The addon creates the layer if it does not exist."""
     bl_idname = "stepper.add_box_uv"
     bl_label = "Box Project UVs"
     bl_options = {"REGISTER", "UNDO"}

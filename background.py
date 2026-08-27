@@ -82,8 +82,8 @@ def _reader_thread(pipe, out_queue):
 
 
 class STEPPER_OT_background_import(bpy.types.Operator):
-    """Import STEP files in a background process (UI stays responsive,
-    ESC cancels)"""
+    """Import STEP files in a background process. The interface stays responsive
+    and Esc cancels the import."""
     bl_idname = "stepper.background_import"
     bl_label = "Background STEP import"
 
